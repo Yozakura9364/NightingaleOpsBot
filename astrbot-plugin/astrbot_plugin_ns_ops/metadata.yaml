@@ -1,0 +1,10 @@
+name: astrbot_plugin_ns_ops
+display_name: Nightingale Silence Ops
+desc: "通过 AstrBot 调用本机 NS Ops Runner，执行受控服务器运维任务。"
+version: v0.1.0
+author: NightingaleSilence
+repo: ""
+keywords:
+  - ops
+  - server
+  - NightingaleSilence

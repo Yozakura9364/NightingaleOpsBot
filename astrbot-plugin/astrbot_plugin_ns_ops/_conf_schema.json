@@ -1,0 +1,31 @@
+{
+  "ops_endpoint": {
+    "description": "NS Ops Runner 地址",
+    "type": "string",
+    "default": "http://host.docker.internal:18766",
+    "hint": "AstrBot 在 Docker 中运行时使用 host.docker.internal 访问 Windows 宿主机。"
+  },
+  "access_token": {
+    "description": "NS Ops Runner Token",
+    "type": "string",
+    "default": "",
+    "hint": "必须与 runner 的 NS_OPS_TOKEN 一致。不要使用测试 token。"
+  },
+  "allowed_sender_ids": {
+    "description": "允许触发 /ns 的 QQ 号",
+    "type": "string",
+    "default": "",
+    "hint": "逗号分隔。留空表示只要求 AstrBot 全局管理员。填了则必须同时是管理员和列表成员。"
+  },
+  "allowed_group_ids": {
+    "description": "允许触发 /ns 的群号",
+    "type": "string",
+    "default": "",
+    "hint": "逗号分隔。留空表示不限制群；私聊不受此项限制。"
+  },
+  "max_output_chars": {
+    "description": "单条消息最大输出长度",
+    "type": "int",
+    "default": 3500
+  }
+}

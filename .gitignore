@@ -1,0 +1,19 @@
+# local secrets and runtime state
+.local/
+*.local.json
+
+# logs
+*.log
+logs/
+
+# dependencies / build output
+node_modules/
+dist/
+
+# Python cache
+__pycache__/
+*.py[cod]
+
+# OS/editor
+.DS_Store
+Thumbs.db

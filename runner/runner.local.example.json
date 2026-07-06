@@ -1,0 +1,7 @@
+{
+  "NS_OPS_TOKEN": "replace-with-a-long-random-token",
+  "NS_OPS_HOST": "127.0.0.1",
+  "NS_OPS_PORT": 18766,
+  "NS_OPS_V2_ROOT": "H:\\NightingaleSilenceWeb\\NightingaleSilenceWebV2",
+  "NS_OPS_ASTRBOT_ROOT": "H:\\NightingaleSilenceWeb\\astrbot"
+}
