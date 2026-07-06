@@ -5,23 +5,29 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $projectRoot = Resolve-Path (Join-Path $PSScriptRoot '..')
-$sourceRoot = Resolve-Path (Join-Path $projectRoot 'astrbot-plugin\astrbot_plugin_ns_ops')
-$targetRoot = Join-Path $AstrBotRoot 'data\plugins\astrbot_plugin_ns_ops'
+$sourceBase = Resolve-Path (Join-Path $projectRoot 'astrbot-plugin')
+$targetBase = Join-Path $AstrBotRoot 'data\plugins'
 
 if (-not (Test-Path -LiteralPath $AstrBotRoot)) {
   throw "AstrBot root not found: $AstrBotRoot"
 }
 
-New-Item -ItemType Directory -Force -Path $targetRoot | Out-Null
-
-Get-ChildItem -LiteralPath $sourceRoot -Recurse -File |
-  Where-Object { $_.FullName -notmatch '\\__pycache__\\' } |
+Get-ChildItem -LiteralPath $sourceBase -Directory |
+  Where-Object { $_.Name -like 'astrbot_plugin_*' } |
   ForEach-Object {
-    $relativePath = $_.FullName.Substring($sourceRoot.Path.Length).TrimStart('\', '/')
-    $targetPath = Join-Path $targetRoot $relativePath
-    $targetDir = Split-Path -Parent $targetPath
-    New-Item -ItemType Directory -Force -Path $targetDir | Out-Null
-    Copy-Item -LiteralPath $_.FullName -Destination $targetPath -Force
-  }
+    $sourceRoot = $_
+    $targetRoot = Join-Path $targetBase $_.Name
+    New-Item -ItemType Directory -Force -Path $targetRoot | Out-Null
 
-Write-Host "Installed astrbot_plugin_ns_ops to $targetRoot"
+    Get-ChildItem -LiteralPath $sourceRoot.FullName -Recurse -File |
+      Where-Object { $_.FullName -notmatch '\\__pycache__\\' -and $_.FullName -notmatch '\\.local\\' } |
+      ForEach-Object {
+        $relativePath = $_.FullName.Substring($sourceRoot.FullName.Length).TrimStart('\', '/')
+        $targetPath = Join-Path $targetRoot $relativePath
+        $targetDir = Split-Path -Parent $targetPath
+        New-Item -ItemType Directory -Force -Path $targetDir | Out-Null
+        Copy-Item -LiteralPath $_.FullName -Destination $targetPath -Force
+      }
+
+    Write-Host "Installed $($sourceRoot.Name) to $targetRoot"
+  }

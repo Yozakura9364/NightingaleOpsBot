@@ -1,0 +1,38 @@
+{
+  "allowed_group_ids": {
+    "description": "允许响应石之家提示的群号",
+    "type": "string",
+    "default": "",
+    "hint": "逗号分隔。留空表示所有群只响应提示，不处理敏感绑定。"
+  },
+  "auto_sign_enabled": {
+    "description": "启用每日自动签到",
+    "type": "bool",
+    "default": true
+  },
+  "auto_sign_hour": {
+    "description": "每日自动签到小时",
+    "type": "int",
+    "default": 9
+  },
+  "auto_sign_minute": {
+    "description": "每日自动签到分钟",
+    "type": "int",
+    "default": 30
+  },
+  "get_sign_reward": {
+    "description": "自动领取可领取的签到奖励",
+    "type": "bool",
+    "default": true
+  },
+  "check_house_remain": {
+    "description": "检查房屋拆除倒计时",
+    "type": "bool",
+    "default": false
+  },
+  "max_output_chars": {
+    "description": "单条消息最大输出长度",
+    "type": "int",
+    "default": 1800
+  }
+}

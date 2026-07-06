@@ -6,6 +6,7 @@ It contains:
 
 - `runner/`: a localhost-only Node.js job runner.
 - `astrbot-plugin/astrbot_plugin_ns_ops/`: the AstrBot plugin that maps QQ `/ns` commands to runner jobs.
+- `astrbot-plugin/astrbot_plugin_risingstone_sign/`: the AstrBot plugin for private Rising Stones binding and daily sign-in.
 - `scripts/`: local install and scheduled-task helpers.
 
 The runner exposes only registered jobs. QQ input selects a job id or structured
@@ -81,6 +82,8 @@ It starts when the current Windows user logs in.
 
 ## QQ Commands
 
+### Ops Commands
+
 Read-only:
 
 ```text
@@ -114,3 +117,43 @@ Confirmation required:
 - `file.write` writes only below `.local\inbox` by default.
 - `v2.deploy` is disabled until `NS_OPS_DEPLOY_NPM_SCRIPT` is configured and
   the matching npm script exists in the V2 project.
+
+### Rising Stones Sign-In
+
+This is a separate AstrBot plugin from `/ns`. It lets QQ users bind their own
+Rising Stones cookie by private message, then run manual sign-in or receive daily
+automatic sign-in results.
+
+Private binding format:
+
+```text
+绑定石之家
+COOKIE: ff14risingstones=...
+USER_AGENT: Mozilla/5.0 ...
+```
+
+Private commands:
+
+```text
+石之家签到
+石之家状态
+解绑石之家
+石之家帮助
+```
+
+Group messages only return guidance and never accept cookies:
+
+```text
+石之家签到
+石之家帮助
+```
+
+Credential storage:
+
+- Stored under the installed AstrBot plugin directory in `.local/`.
+- SQLite stores encrypted cookie and user-agent values.
+- The encryption key is generated locally as `.local/secret.key`.
+- These runtime files are not committed to this repository.
+
+The sign-in API flow is based on
+`StarHeartHunt/ff14risingstone_sign_task` (MIT).
