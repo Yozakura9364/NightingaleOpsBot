@@ -1,0 +1,47 @@
+{
+  "version": 1,
+  "presets": [
+    {
+      "id": "ffxiv-datamining",
+      "label": "FF14 datamining sources",
+      "description": "FF14 multi-locale datamining repositories used by NSGlamour and V2 data workflows.",
+      "items": [
+        {
+          "repo": "InfSein/ffxiv-datamining-mixed",
+          "label": "FF14 datamining mixed locales",
+          "branches": ["master"],
+          "tags": ["ffxiv", "datamining", "chs", "en", "ja", "fr", "de"],
+          "notes": "Folders: chs, en, ja, fr, de."
+        },
+        {
+          "repo": "Ra-Workspace/ffxiv-datamining-ko",
+          "label": "FF14 Korean datamining",
+          "branches": ["master"],
+          "tags": ["ffxiv", "datamining", "ko"],
+          "notes": "Folder: csv."
+        },
+        {
+          "repo": "thewakingsands/ffxiv-datamining-tc",
+          "label": "FF14 Traditional Chinese datamining",
+          "branches": ["main"],
+          "tags": ["ffxiv", "datamining", "tc"],
+          "notes": "Repository root."
+        }
+      ]
+    },
+    {
+      "id": "nightingale-projects",
+      "label": "Nightingale projects",
+      "description": "Repositories maintained for the Nightingale bot and site stack.",
+      "items": [
+        {
+          "repo": "Yozakura9364/NightingaleOpsBot",
+          "label": "NightingaleOpsBot",
+          "branches": ["main"],
+          "tags": ["nightingale", "bot", "ops"],
+          "notes": "QQ bot operations project."
+        }
+      ]
+    }
+  ]
+}

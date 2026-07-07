@@ -1,0 +1,5 @@
+name: astrbot_plugin_deadline_reminder
+desc: Daily deadline reminder for private chats and groups.
+version: 0.1.0
+author: NightingaleSilence
+repo: https://github.com/Yozakura9364/NightingaleOpsBot

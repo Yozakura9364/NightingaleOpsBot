@@ -1,0 +1,18 @@
+[Unit]
+Description=Nightingale Ops Bot Runner
+After=network-online.target docker.service tailscaled.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/nightingale/NightingaleOpsBot
+Environment=NODE_ENV=production
+EnvironmentFile=/opt/nightingale/NightingaleOpsBot/.local/runner.env
+ExecStart=/usr/bin/node /opt/nightingale/NightingaleOpsBot/runner/server.mjs
+Restart=always
+RestartSec=5
+User=nightingale
+Group=nightingale
+
+[Install]
+WantedBy=multi-user.target

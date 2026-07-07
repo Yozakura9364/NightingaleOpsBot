@@ -1,0 +1,38 @@
+{
+  "enabled": {
+    "description": "Enable daily deadline reminders",
+    "type": "bool",
+    "default": true
+  },
+  "daily_hour": {
+    "description": "Daily reminder hour",
+    "type": "int",
+    "default": 9
+  },
+  "daily_minute": {
+    "description": "Daily reminder minute",
+    "type": "int",
+    "default": 0
+  },
+  "timezone": {
+    "description": "Reminder timezone",
+    "type": "string",
+    "default": "Asia/Shanghai"
+  },
+  "manage_requires_admin": {
+    "description": "Only bot/group admins can add, delete, enable, or disable reminders",
+    "type": "bool",
+    "default": true
+  },
+  "manager_user_ids": {
+    "description": "Extra QQ user IDs allowed to manage reminders",
+    "type": "string",
+    "default": "",
+    "hint": "Comma-separated. Leave empty to rely on AstrBot/group admin checks."
+  },
+  "max_output_chars": {
+    "description": "Max message length",
+    "type": "int",
+    "default": 3000
+  }
+}

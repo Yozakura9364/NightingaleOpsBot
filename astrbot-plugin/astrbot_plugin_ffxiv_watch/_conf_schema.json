@@ -1,0 +1,72 @@
+{
+  "enabled": {
+    "description": "启用 FF14 watch 后台轮询",
+    "type": "bool",
+    "default": true
+  },
+  "poll_interval_minutes": {
+    "description": "轮询间隔分钟",
+    "type": "int",
+    "default": 60,
+    "hint": "插件会强制不低于 10 分钟。新闻和商城共用此间隔。"
+  },
+  "startup_delay_seconds": {
+    "description": "启动后延迟多少秒开始第一次轮询",
+    "type": "int",
+    "default": 30
+  },
+  "request_timeout_seconds": {
+    "description": "官方站点请求超时秒数",
+    "type": "int",
+    "default": 20
+  },
+  "rsshub_base_url": {
+    "description": "RSSHub 基础地址",
+    "type": "string",
+    "default": "http://rsshub:1200",
+    "hint": "AstrBot 与 RSSHub 在同一个 docker compose 网络时使用 http://rsshub:1200。"
+  },
+  "enabled_sources": {
+    "description": "全局启用的数据源",
+    "type": "string",
+    "default": "cn-news,cn-notice,jp-news,cn-store,tw-store,jp-store",
+    "hint": "逗号分隔。新闻源只启用国服新闻、国服公告、日服 Lodestone；韩服商城暂不启用。"
+  },
+  "max_items_per_poll": {
+    "description": "每个源每次最多推送条数",
+    "type": "int",
+    "default": 5
+  },
+  "include_images": {
+    "description": "推送正文后单独发送图片",
+    "type": "bool",
+    "default": true,
+    "hint": "仅在数据源返回图片 URL 时发送；图片发送失败不影响文字。"
+  },
+  "max_images_per_item": {
+    "description": "每条更新最多发送图片数",
+    "type": "int",
+    "default": 1
+  },
+  "manage_requires_admin": {
+    "description": "订阅、取消、开关和基线命令是否要求管理员",
+    "type": "bool",
+    "default": true
+  },
+  "manager_user_ids": {
+    "description": "额外允许管理 FF14 watch 的 QQ 号",
+    "type": "string",
+    "default": "",
+    "hint": "逗号分隔。留空则依赖 AstrBot 或群管理员判断。"
+  },
+  "failure_notice_threshold": {
+    "description": "连续失败多少次后在日志中升级为 warning",
+    "type": "int",
+    "default": 3
+  },
+  "max_output_chars": {
+    "description": "单条消息最大输出长度",
+    "type": "int",
+    "default": 3000
+  }
+}

@@ -1,0 +1,61 @@
+{
+  "enabled": {
+    "description": "启用 GitHub Watch 后台轮询",
+    "type": "bool",
+    "default": true
+  },
+  "poll_interval_minutes": {
+    "description": "轮询间隔分钟",
+    "type": "int",
+    "default": 60,
+    "hint": "插件会强制不低于 10 分钟。"
+  },
+  "startup_delay_seconds": {
+    "description": "启动后延迟多少秒开始第一次轮询",
+    "type": "int",
+    "default": 45
+  },
+  "request_timeout_seconds": {
+    "description": "GitHub API 请求超时秒数",
+    "type": "int",
+    "default": 20
+  },
+  "github_token": {
+    "description": "可选 GitHub token",
+    "type": "string",
+    "default": "",
+    "hint": "公开仓库可留空。配置 token 可提高 API 限流额度；不要在群聊发送。"
+  },
+  "proxy_url": {
+    "description": "可选 HTTP/HTTPS 代理地址",
+    "type": "string",
+    "default": "",
+    "hint": "例如 http://172.17.0.1:17891。留空则直连 GitHub。"
+  },
+  "max_events_per_poll": {
+    "description": "每轮每仓库最多推送事件数",
+    "type": "int",
+    "default": 3
+  },
+  "manage_requires_admin": {
+    "description": "订阅、取消、开关、preset 命令是否要求管理员",
+    "type": "bool",
+    "default": true
+  },
+  "manager_user_ids": {
+    "description": "额外允许管理 GitHub Watch 的 QQ 号",
+    "type": "string",
+    "default": "",
+    "hint": "逗号分隔。留空则依赖 AstrBot 或群管理员判断。"
+  },
+  "failure_notice_threshold": {
+    "description": "连续失败多少次后在日志中升级为 warning",
+    "type": "int",
+    "default": 3
+  },
+  "max_output_chars": {
+    "description": "单条消息最大输出长度",
+    "type": "int",
+    "default": 3000
+  }
+}

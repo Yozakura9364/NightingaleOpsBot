@@ -1,0 +1,5 @@
+name: astrbot_plugin_x_feed
+desc: X 账号低频轮询推送插件。
+version: 0.1.0
+author: NightingaleSilence
+repo: https://github.com/Yozakura9364/NightingaleOpsBot

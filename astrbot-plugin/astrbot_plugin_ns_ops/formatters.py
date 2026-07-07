@@ -13,12 +13,19 @@ def format_help() -> str:
             "只读命令：",
             "/ns ping",
             "/ns status",
+            "/ns health",
+            "/ns daily",
             "/ns logs astrbot",
+            "/ns traffic today",
+            "/ns traffic debug",
+            "/ns traffic status",
+            "/ns traffic bind",
             "/ns v2 status",
             "/ns v2 check",
             "/ns v2 build",
             "/ns armoire check-store",
             "/ns armoire audit-store",
+            "/ns armoire audit-store-latest",
             "/ns git status",
             "/ns git diff",
             "",
@@ -28,6 +35,7 @@ def format_help() -> str:
             "/ns git commit <提交说明>",
             "/ns git push",
             "/ns file write <文件名.md> <内容>",
+            "/ns armoire sync-catalog",
             "/ns confirm <验证码>",
         ]
     )
@@ -56,6 +64,57 @@ def format_health(payload: dict, max_chars: int) -> str:
     return clamp_text("\n".join(lines), max_chars)
 
 
+def format_armoire_latest_output(output: str, max_chars: int) -> str:
+    lines = [line.rstrip() for line in str(output or "").splitlines()]
+    header: list[str] = []
+    blocks: list[list[str]] = []
+    current: list[str] = []
+    in_items = False
+
+    for line in lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("# "):
+            continue
+        if stripped == "重点项：":
+            in_items = True
+            continue
+        if stripped.startswith("说明："):
+            break
+        if not in_items:
+            if not stripped.startswith("catalogPath："):
+                header.append(stripped)
+            continue
+        if stripped.startswith("- ["):
+            if current:
+                blocks.append(current)
+            current = [stripped]
+            continue
+        if current and stripped:
+            current.append(stripped)
+
+    if current:
+        blocks.append(current)
+
+    actionable_prefixes = ("- [需人工确认]", "- [可补链接]", "- [已匹配，缺台服链接]")
+    actionable = [block for block in blocks if block and block[0].startswith(actionable_prefixes)]
+
+    result_lines = header[:5]
+    result_lines.extend(["", "需要处理："])
+    if actionable:
+        for block in actionable[:8]:
+            result_lines.append(block[0])
+            if len(block) > 1:
+                result_lines.append(block[1])
+    else:
+        result_lines.append("- 暂无需人工处理项。")
+
+    if len(actionable) > 8:
+        result_lines.append(f"- 还有 {len(actionable) - 8} 项未显示，可到 runner 日志看完整结果。")
+
+    result_lines.extend(["", "说明：只读审核，不会修改 armoire-store-catalog.json。"])
+    return clamp_text("\n".join(result_lines), min(max_chars, 1800))
+
+
 def format_job_response(payload: dict, max_chars: int) -> str:
     if payload.get("confirmationRequired"):
         confirmation = payload.get("confirmation") or {}
@@ -82,7 +141,14 @@ def format_job_response(payload: dict, max_chars: int) -> str:
 
     result = payload.get("result") or {}
     status = "成功" if result.get("ok") else "失败"
-    output = result.get("summary") or result.get("output") or ""
+    raw_output = result.get("output") or result.get("summary") or ""
+    if (
+        result.get("jobId") in {"armoire.audit-store-latest", "armoire.audit-store"}
+        and "NSArmoire 最新商城补全审核" in raw_output
+    ):
+        output = format_armoire_latest_output(raw_output, max_chars)
+    else:
+        output = result.get("summary") or result.get("output") or ""
     lines = [
         f"{status}: {result.get('title', result.get('jobId', '-'))}",
         f"耗时: {result.get('durationMs', 0)}ms",

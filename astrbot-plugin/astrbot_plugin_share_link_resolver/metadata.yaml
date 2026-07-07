@@ -1,0 +1,11 @@
+name: astrbot_plugin_share_link_resolver
+display_name: QQ Share Link Resolver
+desc: "Extracts original URLs from QQ JSON share cards."
+version: v0.1.0
+author: NightingaleSilence
+repo: https://github.com/Yozakura9364/NightingaleOpsBot
+keywords:
+  - qq
+  - share
+  - link
+  - resolver

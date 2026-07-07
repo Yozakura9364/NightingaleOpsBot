@@ -1,0 +1,123 @@
+{
+  "enabled": {
+    "description": "启用自动解析",
+    "type": "bool",
+    "default": true
+  },
+  "allow_private": {
+    "description": "允许私聊自动解析",
+    "type": "bool",
+    "default": true
+  },
+  "allow_groups": {
+    "description": "允许群聊自动解析",
+    "type": "bool",
+    "default": true
+  },
+  "allowed_group_ids": {
+    "description": "群白名单",
+    "type": "string",
+    "default": "",
+    "hint": "逗号分隔。留空表示所有群。"
+  },
+  "blocked_group_ids": {
+    "description": "群黑名单",
+    "type": "string",
+    "default": "",
+    "hint": "逗号分隔。优先级高于白名单。"
+  },
+  "include_plain_text": {
+    "description": "解析普通文本中的链接",
+    "type": "bool",
+    "default": false,
+    "hint": "默认只处理 QQ 分享 JSON 卡片，避免重复回复普通链接。"
+  },
+  "max_links_per_message": {
+    "description": "每条消息最多回复链接数",
+    "type": "int",
+    "default": 1
+  },
+  "clean_share_params": {
+    "description": "清理分享追踪参数",
+    "type": "bool",
+    "default": true,
+    "hint": "小红书会改写为 PC 分享形态并保留 xsec_token / xsec_source，其他平台移除常见追踪参数。"
+  },
+  "tracking_params": {
+    "description": "需要移除的参数名",
+    "type": "string",
+    "default": "",
+    "hint": "逗号分隔。留空使用内置列表。"
+  },
+  "send_images": {
+    "description": "发送卡片配图",
+    "type": "bool",
+    "default": true,
+    "hint": "从 QQ 分享卡片中识别图片 URL，并和链接一起发送。"
+  },
+  "render_card_images": {
+    "description": "生成链接长图",
+    "type": "bool",
+    "default": true,
+    "hint": "开启后，分享卡片会生成标题/封面/链接长图；/转图 命令也会使用长图输出。"
+  },
+  "card_width": {
+    "description": "长图宽度",
+    "type": "int",
+    "default": 760
+  },
+  "card_max_height": {
+    "description": "长图最大高度",
+    "type": "int",
+    "default": 2200
+  },
+  "fetch_timeout_seconds": {
+    "description": "命令抓取网页超时秒数",
+    "type": "int",
+    "default": 12
+  },
+  "fetch_max_bytes": {
+    "description": "命令抓取网页最大字节数",
+    "type": "int",
+    "default": 1500000
+  },
+  "max_images_per_message": {
+    "description": "每条消息最多发送图片数",
+    "type": "int",
+    "default": 1
+  },
+  "image_domains": {
+    "description": "识别为配图的域名",
+    "type": "string",
+    "default": "qq.ugcimg.cn,qpic.cn,gtimg.cn",
+    "hint": "逗号分隔。会同时匹配子域名。"
+  },
+  "exclude_media_links": {
+    "description": "过滤图片/视频/CDN 资源链接",
+    "type": "bool",
+    "default": true
+  },
+  "ignored_domains": {
+    "description": "忽略的域名",
+    "type": "string",
+    "default": "qpic.cn,qlogo.cn,gtimg.cn,thirdqq.qlogo.cn,qq.ugcimg.cn",
+    "hint": "逗号分隔。会同时匹配子域名。"
+  },
+  "reply_prefix": {
+    "description": "回复前缀",
+    "type": "string",
+    "default": "解析到分享链接："
+  },
+  "stop_after_resolved": {
+    "description": "解析成功后阻止后续插件继续处理",
+    "type": "bool",
+    "default": true,
+    "hint": "开启可减少其他插件对 JSON 卡片报“不支持的消息类型”。"
+  },
+  "debug_log": {
+    "description": "输出调试日志",
+    "type": "bool",
+    "default": false,
+    "hint": "只记录链接数量，不输出完整卡片内容。"
+  }
+}

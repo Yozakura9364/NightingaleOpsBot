@@ -1,0 +1,10 @@
+name: astrbot_plugin_ignore_nonebot_commands
+display_name: Nightingale NoneBot Command Guard
+desc: "Stops AstrBot from answering commands reserved for NoneBot."
+version: v0.1.0
+author: NightingaleSilence
+repo: https://github.com/Yozakura9364/NightingaleOpsBot
+keywords:
+  - nonebot
+  - onebot
+  - command-guard

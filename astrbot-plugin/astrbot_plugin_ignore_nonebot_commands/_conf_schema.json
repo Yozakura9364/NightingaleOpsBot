@@ -1,0 +1,14 @@
+{
+  "ignored_commands": {
+    "description": "Exact command words reserved for NoneBot",
+    "type": "string",
+    "default": "nbping,/nbping",
+    "hint": "Comma or newline separated. AstrBot will stop handling messages whose first line is exactly one of these commands, or begins with one of them followed by arguments."
+  },
+  "ignored_prefixes": {
+    "description": "Message prefixes reserved for NoneBot",
+    "type": "string",
+    "default": "/mys,mys",
+    "hint": "Comma or newline separated. Leave empty unless a future NoneBot plugin owns a whole command prefix."
+  }
+}

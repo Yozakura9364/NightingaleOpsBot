@@ -5,6 +5,8 @@
   "type": "module",
   "scripts": {
     "start": "node runner/server.mjs",
-    "check": "node --check runner/server.mjs && node --check runner/jobs.mjs"
+    "check": "node --check runner/server.mjs && node --check runner/jobs.mjs && node --check runner/tencentCloudTraffic.mjs && node --check runner/systemHealth.mjs && node --check runner/armoireStoreLatest.mjs && node --check runner/risingstoneQrSessions.mjs && node --check tools/probe-risingstone-qr-login.mjs && node --check tools/probe-ffxiv-watch-sources.mjs",
+    "probe:risingstone-login": "node tools/probe-risingstone-qr-login.mjs",
+    "probe:ffxiv-watch": "node tools/probe-ffxiv-watch-sources.mjs"
   }
 }

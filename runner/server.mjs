@@ -1,6 +1,20 @@
 import { createServer } from 'node:http'
 import { randomInt } from 'node:crypto'
 import { listJobs, getJob, paths, prepareJob, runJob } from './jobs.mjs'
+import {
+  cancelQrLoginSession,
+  cleanupExpiredQrSessions,
+  getQrLoginImage,
+  getQrLoginStatus,
+  startQrLoginSession
+} from './risingstoneQrSessions.mjs'
+import {
+  cancelSqmallQrLoginSession,
+  cleanupExpiredSqmallQrSessions,
+  getSqmallQrLoginImage,
+  getSqmallQrLoginStatus,
+  startSqmallQrLoginSession
+} from './sqmallQrSessions.mjs'
 
 const HOST = process.env.NS_OPS_HOST || '127.0.0.1'
 const PORT = Number.parseInt(process.env.NS_OPS_PORT || '18766', 10)
@@ -15,6 +29,14 @@ function sendJson(response, statusCode, payload) {
   const body = `${JSON.stringify(payload, null, 2)}\n`
   response.writeHead(statusCode, {
     'content-type': 'application/json; charset=utf-8',
+    'cache-control': 'no-store'
+  })
+  response.end(body)
+}
+
+function sendBinary(response, statusCode, contentType, body) {
+  response.writeHead(statusCode, {
+    'content-type': contentType,
     'cache-control': 'no-store'
   })
   response.end(body)
@@ -126,6 +148,54 @@ async function handleRequest(request, response) {
   }
 
   try {
+    if (request.method === 'POST' && pathname === '/risingstone/qr/start') {
+      const payload = await readBody(request)
+      sendJson(response, 200, { ok: true, session: await startQrLoginSession(payload) })
+      return
+    }
+
+    const qrMatch = pathname.match(/^\/risingstone\/qr\/([^/]+)(?:\/(image|status))?$/)
+    if (qrMatch) {
+      const [, sessionId, action] = qrMatch
+      if (request.method === 'GET' && action === 'image') {
+        const image = await getQrLoginImage(sessionId)
+        sendBinary(response, 200, image.contentType, image.body)
+        return
+      }
+      if (request.method === 'GET' && action === 'status') {
+        sendJson(response, 200, { ok: true, session: await getQrLoginStatus(sessionId) })
+        return
+      }
+      if (request.method === 'DELETE' && !action) {
+        sendJson(response, 200, { ok: true, session: await cancelQrLoginSession(sessionId) })
+        return
+      }
+    }
+
+    if (request.method === 'POST' && pathname === '/sqmall/qr/start') {
+      const payload = await readBody(request)
+      sendJson(response, 200, { ok: true, session: await startSqmallQrLoginSession(payload) })
+      return
+    }
+
+    const sqmallQrMatch = pathname.match(/^\/sqmall\/qr\/([^/]+)(?:\/(image|status))?$/)
+    if (sqmallQrMatch) {
+      const [, sessionId, action] = sqmallQrMatch
+      if (request.method === 'GET' && action === 'image') {
+        const image = await getSqmallQrLoginImage(sessionId)
+        sendBinary(response, 200, image.contentType, image.body)
+        return
+      }
+      if (request.method === 'GET' && action === 'status') {
+        sendJson(response, 200, { ok: true, session: await getSqmallQrLoginStatus(sessionId) })
+        return
+      }
+      if (request.method === 'DELETE' && !action) {
+        sendJson(response, 200, { ok: true, session: await cancelSqmallQrLoginSession(sessionId) })
+        return
+      }
+    }
+
     if (request.method === 'GET' && pathname === '/jobs') {
       sendJson(response, 200, { ok: true, jobs: listJobs() })
       return
@@ -198,3 +268,8 @@ server.listen(PORT, HOST, () => {
     console.warn('[ns-ops-runner] NS_OPS_TOKEN is not set; job endpoints are disabled.')
   }
 })
+
+setInterval(() => {
+  void cleanupExpiredQrSessions()
+  void cleanupExpiredSqmallQrSessions()
+}, 30000).unref()

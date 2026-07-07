@@ -3,6 +3,21 @@ import { createHash } from 'node:crypto'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, extname, isAbsolute, normalize, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import {
+  getTencentCloudTrafficDebugReport,
+  getTencentCloudTrafficReport
+} from './tencentCloudTraffic.mjs'
+import {
+  getSystemAlertsReport,
+  getSystemDailyReport,
+  getSystemHealthReport
+} from './systemHealth.mjs'
+import {
+  auditLatestStoreForArmoire,
+  checkStoreCatalogMirror,
+  prepareSyncStoreCatalogMirror,
+  syncStoreCatalogMirror
+} from './armoireStoreLatest.mjs'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const PROJECT_ROOT = resolve(process.env.NS_OPS_PROJECT_ROOT || resolve(__dirname, '..'))
@@ -214,6 +229,58 @@ async function packageScripts() {
   return packageJson.scripts || {}
 }
 
+async function hasPackageScript(scriptName) {
+  try {
+    const scripts = await packageScripts()
+    return Boolean(scripts[scriptName])
+  } catch {
+    return false
+  }
+}
+
+function isNpmUnavailable(result) {
+  const text = `${result.stderr || ''}\n${result.stdout || ''}`
+  return /spawn npm ENOENT|npm(?:\.cmd)?: command not found|ENOENT/i.test(text)
+}
+
+async function runV2NpmOrFallback(scriptName, fallback, fallbackReason) {
+  if (await hasPackageScript(scriptName)) {
+    const result = await runProcess(
+      createNpmStep(['run', scriptName], {
+        cwd: V2_ROOT,
+        timeoutMs: LONG_TIMEOUT_MS
+      })
+    )
+
+    if (result.ok) {
+      return {
+        ok: true,
+        output: [result.stdout, result.stderr ? `[stderr]\n${result.stderr}` : '']
+          .filter(Boolean)
+          .join('\n')
+          .trim()
+      }
+    }
+
+    if (!isNpmUnavailable(result)) {
+      return {
+        ok: false,
+        output: [result.stdout, result.stderr ? `[stderr]\n${result.stderr}` : '']
+          .filter(Boolean)
+          .join('\n')
+          .trim()
+      }
+    }
+  }
+
+  const fallbackResult = await fallback()
+  const prefix = fallbackReason ? `${fallbackReason}\n\n` : ''
+  return {
+    ok: Boolean(fallbackResult.ok),
+    output: `${prefix}${fallbackResult.output || ''}`.trim()
+  }
+}
+
 async function prepareDeploy() {
   if (!DEPLOY_NPM_SCRIPT) {
     userError('尚未配置真实部署脚本。需要给 runner 设置 NS_OPS_DEPLOY_NPM_SCRIPT，例如 deploy。')
@@ -332,6 +399,61 @@ export const jobs = new Map(
       readOnly: true,
       steps: [createStep('docker', ['logs', '--tail', '120', 'astrbot'], { timeoutMs: 30000 })]
     },
+    'system.health': {
+      title: 'NS 综合健康检查',
+      description: '查看流量、磁盘、CPU/内存、容器、服务、站点、证书和错误日志。',
+      readOnly: true,
+      run: async () => {
+        return {
+          ok: true,
+          output: await getSystemHealthReport()
+        }
+      }
+    },
+    'system.daily': {
+      title: 'NS 每日状态',
+      description: '生成每日服务器状态报告。',
+      readOnly: true,
+      run: async () => {
+        return {
+          ok: true,
+          output: await getSystemDailyReport()
+        }
+      }
+    },
+    'system.alerts': {
+      title: 'NS 异常告警检查',
+      description: '检查是否存在需要主动推送的服务器异常。',
+      readOnly: true,
+      run: async () => {
+        return {
+          ok: true,
+          output: await getSystemAlertsReport()
+        }
+      }
+    },
+    'cloud.tencent.traffic.today': {
+      title: '腾讯云今日流量',
+      description: '读取腾讯云轻量应用服务器流量包、今日公网流量估算和峰值。',
+      readOnly: true,
+      run: async () => {
+        return {
+          ok: true,
+          output: await getTencentCloudTrafficReport()
+        }
+      }
+    },
+    'cloud.tencent.traffic.debug': {
+      title: '腾讯云监控调试',
+      description: '测试腾讯云轻量应用服务器 API、云监控指标和维度。',
+      readOnly: true,
+      run: async () => {
+        return {
+          ok: true,
+          output: await getTencentCloudTrafficDebugReport()
+        }
+      }
+    },
     'v2.status': {
       title: 'V2 工作区状态',
       description: '查看当前分支、最近提交和 git status。',
@@ -438,25 +560,47 @@ export const jobs = new Map(
     },
     'armoire.check-store': {
       title: 'NSArmoire 商城目录校验',
-      description: '运行商城目录结构和映射校验。',
+      description: '运行商城目录校验；服务器轻量模式下校验 catalog 镜像。',
       readOnly: true,
-      steps: [
-        createNpmStep(['run', 'check:armoire-store-catalog:quiet'], {
-          cwd: V2_ROOT,
-          timeoutMs: LONG_TIMEOUT_MS
-        })
-      ]
+      run: async () =>
+        runV2NpmOrFallback(
+          'check:armoire-store-catalog:quiet',
+          () => checkStoreCatalogMirror({ v2Root: V2_ROOT }),
+          '未检测到可用的完整 V2 npm 校验环境，已改用服务器 catalog 镜像轻量校验。'
+        )
     },
     'armoire.audit-store': {
       title: 'NSArmoire 商城覆盖审计',
-      description: '审计国际服商城覆盖情况。',
+      description: '审计商城覆盖情况；服务器轻量模式下降级为最新商城审核。',
       readOnly: true,
-      steps: [
-        createNpmStep(['run', 'audit:armoire-store-coverage'], {
-          cwd: V2_ROOT,
-          timeoutMs: LONG_TIMEOUT_MS
-        })
-      ]
+      run: async () =>
+        runV2NpmOrFallback(
+          'audit:armoire-store-coverage',
+          async () => ({
+            ok: true,
+            output: await auditLatestStoreForArmoire({ v2Root: V2_ROOT })
+          }),
+          '未检测到可用的完整 V2 npm 审计环境，已改用最新商城补全审核。'
+        )
+    },
+    'armoire.audit-store-latest': {
+      title: 'NSArmoire 最新商城补全审核',
+      description: '抓取各服最新商城/商城新闻，审核是否已进入商城目录；只读，不写 JSON。',
+      readOnly: true,
+      run: async () => {
+        return {
+          ok: true,
+          output: await auditLatestStoreForArmoire({ v2Root: V2_ROOT })
+        }
+      }
+    },
+    'armoire.sync-catalog': {
+      title: 'NSArmoire 同步商城目录镜像',
+      description: '把 V2/source catalog 同步到 runner 镜像；需要确认。',
+      readOnly: false,
+      requiresConfirmation: true,
+      prepare: async () => prepareSyncStoreCatalogMirror({ v2Root: V2_ROOT }),
+      run: async (payload) => syncStoreCatalogMirror({ v2Root: V2_ROOT, ...payloadObject(payload) })
     },
     'restart.astrbot': {
       title: '重启 AstrBot 容器',

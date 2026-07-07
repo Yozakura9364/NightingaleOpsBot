@@ -1,0 +1,45 @@
+{
+  "ops_endpoint": {
+    "description": "NS Ops Runner 地址",
+    "type": "string",
+    "default": "http://host.docker.internal:18766",
+    "hint": "用于盛趣商城扫码绑定；AstrBot 在 Docker 中运行时通过 host.docker.internal 访问服务器宿主机 runner。"
+  },
+  "ops_access_token": {
+    "description": "NS Ops Runner Token",
+    "type": "string",
+    "default": "",
+    "hint": "用于盛趣商城扫码绑定。必须与 runner 的 NS_OPS_TOKEN 一致，不要公开。"
+  },
+  "qr_bind_timeout_seconds": {
+    "description": "扫码绑定等待秒数",
+    "type": "int",
+    "default": 180
+  },
+  "allowed_group_ids": {
+    "description": "允许响应盛趣商城提示的群号",
+    "type": "string",
+    "default": "",
+    "hint": "逗号分隔。留空表示所有群只响应提示，不处理敏感绑定。"
+  },
+  "auto_sign_enabled": {
+    "description": "启用每日自动签到",
+    "type": "bool",
+    "default": true
+  },
+  "auto_sign_hour": {
+    "description": "每日自动签到小时",
+    "type": "int",
+    "default": 9
+  },
+  "auto_sign_minute": {
+    "description": "每日自动签到分钟",
+    "type": "int",
+    "default": 40
+  },
+  "max_output_chars": {
+    "description": "单条消息最大输出长度",
+    "type": "int",
+    "default": 1800
+  }
+}

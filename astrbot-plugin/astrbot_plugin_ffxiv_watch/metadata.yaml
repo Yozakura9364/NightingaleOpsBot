@@ -1,0 +1,5 @@
+name: astrbot_plugin_ffxiv_watch
+desc: FF14 official news and store update watcher.
+version: 0.1.0
+author: NightingaleSilence
+repo: https://github.com/Yozakura9364/NightingaleOpsBot

@@ -1,4 +1,21 @@
 {
+  "ops_endpoint": {
+    "description": "NS Ops Runner 地址",
+    "type": "string",
+    "default": "http://host.docker.internal:18766",
+    "hint": "用于石之家扫码绑定；AstrBot 在 Docker 中运行时使用 host.docker.internal 访问 Windows 宿主机。"
+  },
+  "ops_access_token": {
+    "description": "NS Ops Runner Token",
+    "type": "string",
+    "default": "",
+    "hint": "用于石之家扫码绑定。必须与 runner 的 NS_OPS_TOKEN 一致，不要公开。"
+  },
+  "qr_bind_timeout_seconds": {
+    "description": "扫码绑定等待秒数",
+    "type": "int",
+    "default": 180
+  },
   "allowed_group_ids": {
     "description": "允许响应石之家提示的群号",
     "type": "string",
@@ -29,6 +46,12 @@
     "description": "检查房屋拆除倒计时",
     "type": "bool",
     "default": false
+  },
+  "show_account_summary": {
+    "description": "在私聊绑定、状态和签到结果中显示区服/服务器/角色名",
+    "type": "bool",
+    "default": true,
+    "hint": "只应在私聊命令中显示，避免公开群里暴露角色信息。"
   },
   "max_output_chars": {
     "description": "单条消息最大输出长度",

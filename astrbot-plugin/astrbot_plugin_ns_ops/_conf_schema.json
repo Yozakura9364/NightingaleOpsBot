@@ -27,5 +27,33 @@
     "description": "单条消息最大输出长度",
     "type": "int",
     "default": 3500
+  },
+  "traffic_report_enabled": {
+    "description": "是否启用腾讯云流量日报定时任务",
+    "type": "bool",
+    "default": true,
+    "hint": "需要先私聊发送 /ns traffic bind 绑定接收窗口。"
+  },
+  "traffic_report_hour": {
+    "description": "腾讯云流量日报推送小时",
+    "type": "int",
+    "default": 12
+  },
+  "traffic_report_minute": {
+    "description": "腾讯云流量日报推送分钟",
+    "type": "int",
+    "default": 0
+  },
+  "health_alert_enabled": {
+    "description": "是否启用服务器异常自动告警",
+    "type": "bool",
+    "default": true,
+    "hint": "复用 /ns traffic bind 绑定的私聊接收窗口；同一批异常只推一次，恢复后会推恢复通知。"
+  },
+  "health_alert_interval_seconds": {
+    "description": "服务器异常检查间隔秒数",
+    "type": "int",
+    "default": 300,
+    "hint": "建议不低于 300，避免频繁调用外部 API 和刷屏。"
   }
 }

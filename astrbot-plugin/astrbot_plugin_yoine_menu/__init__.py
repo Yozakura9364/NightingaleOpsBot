@@ -1,0 +1,1 @@
+"""Yoine command menu plugin."""

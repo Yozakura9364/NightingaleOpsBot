@@ -1,0 +1,107 @@
+{
+  "rsshub_base_url": {
+    "description": "RSSHub 基础地址",
+    "type": "string",
+    "default": "http://rsshub:1200",
+    "hint": "AstrBot 与 RSSHub 在同一个 docker compose 网络时使用 http://rsshub:1200。"
+  },
+  "enabled": {
+    "description": "启用后台轮询推送",
+    "type": "bool",
+    "default": true
+  },
+  "poll_interval_minutes": {
+    "description": "轮询间隔分钟",
+    "type": "int",
+    "default": 10,
+    "hint": "插件会强制不低于 5 分钟。"
+  },
+  "max_items_per_poll": {
+    "description": "每个账号每次最多推送条数",
+    "type": "int",
+    "default": 3
+  },
+  "initial_backfill_items": {
+    "description": "新增订阅时立即推送的最新条数",
+    "type": "int",
+    "default": 1
+  },
+  "include_images": {
+    "description": "推送正文后单独发送图片",
+    "type": "bool",
+    "default": true,
+    "hint": "图片来自 RSSHub feed 中的图片 URL。文字会先发送，图片发送失败不影响文字。"
+  },
+  "max_images_per_post": {
+    "description": "每条更新最多发送图片数",
+    "type": "int",
+    "default": 1
+  },
+  "image_proxy_url": {
+    "description": "图片下载代理",
+    "type": "string",
+    "default": "http://172.19.0.1:7890",
+    "hint": "AstrBot 容器下载 X 图片时使用。留空则直连。"
+  },
+  "image_download_timeout_seconds": {
+    "description": "图片下载超时秒数",
+    "type": "int",
+    "default": 20
+  },
+  "max_image_bytes": {
+    "description": "单张图片最大下载字节数",
+    "type": "int",
+    "default": 8000000
+  },
+  "admin_user_ids": {
+    "description": "允许管理订阅的 QQ 号",
+    "type": "string",
+    "default": "",
+    "hint": "逗号分隔。留空表示不限制。"
+  },
+  "failure_notice_threshold": {
+    "description": "连续失败多少次后在日志中升级为警告",
+    "type": "int",
+    "default": 6
+  },
+  "translate_enabled": {
+    "description": "启用推文翻译",
+    "type": "bool",
+    "default": false,
+    "hint": "开启后，推送正文会调用 AstrBot LLM Provider 翻译。翻译失败时自动保留原文，不影响推送。"
+  },
+  "translate_target_lang": {
+    "description": "翻译目标语言",
+    "type": "string",
+    "default": "简体中文",
+    "hint": "例如：简体中文、日语、英语。"
+  },
+  "translate_provider_id": {
+    "description": "翻译使用的 LLM Provider ID",
+    "type": "string",
+    "default": "",
+    "hint": "留空时按当前会话 Provider -> 第一个可用 Provider 自动选择。"
+  },
+  "translate_show_original": {
+    "description": "翻译后保留原文",
+    "type": "bool",
+    "default": true,
+    "hint": "开启时推送同时包含原文和译文；关闭时只显示译文。"
+  },
+  "translate_prompt": {
+    "description": "自定义翻译提示词",
+    "type": "text",
+    "default": "",
+    "hint": "留空使用内置提示词。可使用 {target_lang} 表示目标语言。"
+  },
+  "translate_timeout_seconds": {
+    "description": "翻译超时秒数",
+    "type": "int",
+    "default": 45
+  },
+  "max_output_chars": {
+    "description": "单条消息最大输出长度",
+    "type": "int",
+    "default": 1800
+  }
+}
