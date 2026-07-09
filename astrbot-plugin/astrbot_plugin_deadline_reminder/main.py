@@ -158,6 +158,8 @@ class DeadlineReminderPlugin(Star):
         today = now.date().isoformat()
         now_iso = now.isoformat(timespec="minutes")
         for target in self.store.list_targets_for_daily(now_iso=now_iso):
+            if target.target_origin == self.store.BROADCAST_ORIGIN or target.target_kind == "broadcast":
+                continue
             if target.last_daily_date == today:
                 continue
             items = self.store.list_active_deadlines(target_origin=target.target_origin, now_iso=now_iso)

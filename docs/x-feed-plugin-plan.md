@@ -1,5 +1,7 @@
 # X Feed Push Plugin Runbook
 
+> 这份文档保留为 RSSHub 时代的历史方案，当前生产请改看 `docs/x-feed-twikit-runbook.md`。
+
 ## Current Status
 
 `astrbot_plugin_x_feed` is deployed on the production AstrBot server.

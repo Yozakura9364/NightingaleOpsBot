@@ -12,8 +12,9 @@ from astrbot.api.event import AstrMessageEvent, MessageChain, filter
 import astrbot.api.message_components as Comp
 from astrbot.api.star import Context, Star, register
 
-from .feed_client import FeedItem, fetch_user_feed, normalize_handle
+from .feed_client import FeedItem, fetch_rsshub_user_feed, normalize_handle
 from .storage import Subscription, XFeedStore
+from .twikit_client import TwikitFeedClient, TwikitSettings
 
 
 def _split_ids(value) -> set[str]:
@@ -72,7 +73,7 @@ def _help_text() -> str:
             "恢复当前会话：/x推送开",
             "翻译状态：/x翻译状态",
             "",
-            "说明：低频轮询，非实时推送；RSSHub 需要先配置可用的 X 数据源。",
+            "说明：低频轮询，非实时推送；默认后端为 Twikit，会读取 cookies 文件抓取 X。",
             "翻译：可在插件配置中启用，使用 AstrBot LLM Provider。",
         ]
     )
@@ -95,6 +96,7 @@ class XFeedPlugin(Star):
         self.max_output_chars = int(self.config.get("max_output_chars", 1800) or 1800)
         self._poll_task: asyncio.Task | None = None
         self._poll_lock = asyncio.Lock()
+        self._twikit_client: TwikitFeedClient | None = None
 
     async def initialize(self) -> None:
         if self.config.get("enabled", True):
@@ -109,8 +111,31 @@ class XFeedPlugin(Star):
             except asyncio.CancelledError:
                 pass
 
-    def _base_url(self) -> str:
+    def _backend(self) -> str:
+        value = str(self.config.get("backend", "twikit") or "twikit").strip().lower()
+        return "rsshub" if value == "rsshub" else "twikit"
+
+    def _backend_label(self) -> str:
+        return "RSSHub" if self._backend() == "rsshub" else "Twikit"
+
+    def _rsshub_base_url(self) -> str:
         return str(self.config.get("rsshub_base_url", "http://rsshub:1200") or "http://rsshub:1200").rstrip("/")
+
+    def _twikit_cookies_file(self) -> Path:
+        raw = str(self.config.get("twikit_cookies_file", ".local/x_cookies.json") or "").strip()
+        if not raw:
+            raw = ".local/x_cookies.json"
+        path = Path(raw)
+        return path if path.is_absolute() else (Path(__file__).resolve().parent / path)
+
+    def _twikit_locale(self) -> str:
+        return str(self.config.get("twikit_locale", "en-US") or "en-US").strip() or "en-US"
+
+    def _twikit_proxy_url(self) -> str:
+        return str(self.config.get("twikit_proxy_url", "http://172.19.0.1:7890") or "").strip()
+
+    def _twikit_timeline_count(self) -> int:
+        return max(1, int(self.config.get("twikit_timeline_count", 5) or 5))
 
     def _poll_interval_seconds(self) -> int:
         minutes = int(self.config.get("poll_interval_minutes", 10) or 10)
@@ -170,7 +195,19 @@ class XFeedPlugin(Star):
         return not admin_ids or str(event.get_sender_id()) in admin_ids
 
     async def _fetch_feed(self, handle: str) -> list[FeedItem]:
-        return await asyncio.to_thread(fetch_user_feed, self._base_url(), handle)
+        if self._backend() == "rsshub":
+            return await asyncio.to_thread(fetch_rsshub_user_feed, self._rsshub_base_url(), handle)
+
+        if self._twikit_client is None:
+            self._twikit_client = TwikitFeedClient(
+                TwikitSettings(
+                    cookies_file=self._twikit_cookies_file(),
+                    locale=self._twikit_locale(),
+                    proxy_url=self._twikit_proxy_url(),
+                    timeline_count=self._twikit_timeline_count(),
+                )
+            )
+        return await self._twikit_client.fetch_user_feed(handle)
 
     async def _send_to_origin(self, origin: str, text: str) -> None:
         if not origin:
@@ -461,7 +498,7 @@ class XFeedPlugin(Star):
         except Exception as error:
             yield event.plain_result(
                 _clamp(
-                    f"订阅前测试失败：{error}\n\nRSSHub 需要先配置可用的 X 数据源。",
+                    f"订阅前测试失败：{error}\n\n当前后端：{self._backend_label()}。",
                     self.max_output_chars,
                 )
             )
@@ -535,7 +572,9 @@ class XFeedPlugin(Star):
         try:
             items = await self._fetch_feed(handle)
         except Exception as error:
-            yield event.plain_result(_clamp(f"测试失败：{error}", self.max_output_chars))
+            yield event.plain_result(
+                _clamp(f"测试失败：{error}\n\n当前后端：{self._backend_label()}。", self.max_output_chars)
+            )
             return
         if not items:
             yield event.plain_result(f"@{handle} 当前没有可推送条目。")

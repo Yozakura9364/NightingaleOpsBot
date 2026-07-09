@@ -38,7 +38,7 @@ def normalize_handle(value: str) -> str:
     return raw.lower()
 
 
-def fetch_user_feed(base_url: str, handle: str, *, timeout: float = 30.0) -> list[FeedItem]:
+def fetch_rsshub_user_feed(base_url: str, handle: str, *, timeout: float = 30.0) -> list[FeedItem]:
     normalized = normalize_handle(handle)
     url = _feed_url(base_url, normalized)
     request = Request(url, headers={"User-Agent": "NightingaleOpsBot-XFeed/0.1"})
@@ -71,6 +71,10 @@ def fetch_user_feed(base_url: str, handle: str, *, timeout: float = 30.0) -> lis
     if items:
         return items
     return _parse_atom_entries(root)
+
+
+def fetch_user_feed(base_url: str, handle: str, *, timeout: float = 30.0) -> list[FeedItem]:
+    return fetch_rsshub_user_feed(base_url, handle, timeout=timeout)
 
 
 def _feed_url(base_url: str, handle: str) -> str:

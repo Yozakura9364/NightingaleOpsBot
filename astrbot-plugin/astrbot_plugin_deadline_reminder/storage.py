@@ -121,7 +121,8 @@ class DeadlineStore:
     ) -> DeadlineItem:
         now = self._now()
         with self._lock, self._connect() as connection:
-            self.ensure_target(target_origin=target_origin, target_kind=target_kind)
+            if target_origin != self.BROADCAST_ORIGIN and target_kind != "broadcast":
+                self.ensure_target(target_origin=target_origin, target_kind=target_kind)
             cursor = connection.execute(
                 """
                 INSERT INTO deadlines (
@@ -220,6 +221,8 @@ class DeadlineStore:
                  AND bd.enabled = 1
                  AND bd.due_at >= ?
                 WHERE t.enabled = 1
+                  AND t.target_origin <> ?
+                  AND t.target_kind <> 'broadcast'
                   AND (
                     d.id IS NOT NULL
                     OR (
@@ -230,7 +233,7 @@ class DeadlineStore:
                   )
                 ORDER BY t.target_origin ASC
                 """,
-                (now_iso, self.BROADCAST_ORIGIN, now_iso),
+                (now_iso, self.BROADCAST_ORIGIN, now_iso, self.BROADCAST_ORIGIN),
             ).fetchall()
         return [self._row_to_target(row) for row in rows]
 

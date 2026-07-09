@@ -1,9 +1,39 @@
 {
+  "backend": {
+    "description": "X 抓取后端",
+    "type": "string",
+    "default": "twikit",
+    "hint": "可选 twikit / rsshub。默认使用 twikit，直接读取 cookies 文件抓取 X。"
+  },
   "rsshub_base_url": {
     "description": "RSSHub 基础地址",
     "type": "string",
     "default": "http://rsshub:1200",
-    "hint": "AstrBot 与 RSSHub 在同一个 docker compose 网络时使用 http://rsshub:1200。"
+    "hint": "仅 backend=rsshub 时使用。AstrBot 与 RSSHub 在同一个 docker compose 网络时使用 http://rsshub:1200。"
+  },
+  "twikit_cookies_file": {
+    "description": "Twikit cookies 文件",
+    "type": "string",
+    "default": ".local/x_cookies.json",
+    "hint": "支持三种格式：Twikit 保存的 JSON dict、浏览器导出的 cookie JSON 数组、或 auth_token=...; ct0=... 文本。相对路径会按插件目录解析。"
+  },
+  "twikit_locale": {
+    "description": "Twikit 语言环境",
+    "type": "string",
+    "default": "en-US",
+    "hint": "常用 en-US 或 ja-JP。主要影响请求头和部分返回字段。"
+  },
+  "twikit_proxy_url": {
+    "description": "Twikit 抓取代理",
+    "type": "string",
+    "default": "http://172.19.0.1:7890",
+    "hint": "留空则直连。与图片代理分开配置，便于单独排查。"
+  },
+  "twikit_timeline_count": {
+    "description": "Twikit 每次抓取条数",
+    "type": "int",
+    "default": 5,
+    "hint": "建议 3-10。数量越大，请求越重。"
   },
   "enabled": {
     "description": "启用后台轮询推送",
