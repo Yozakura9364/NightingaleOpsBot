@@ -7,8 +7,7 @@ from astrbot.api.star import Context, Star, register
 PUBLIC_INDEX = """Yoine 菜单
 
 /yoine 签到  账号绑定、签到类
-/yoine 二游  森空岛、鸣潮 / GsCore
-/yoine 推送  日程、GitHub、X、Bilibili、链接转图
+/yoine 推送  日程、GitHub、B站、X、链接转图
 /yoine 全部  分段发送全部公开菜单
 
 账号凭证请私聊操作；群里不会接收 cookie、token、扫码登录凭证。
@@ -36,33 +35,6 @@ PUBLIC_MENU_PARTS = {
 /盛趣商城改名 旧槽位 新槽位
 /盛趣商城解绑 槽位
 别名：/盛趣绑定 /商城绑定 /盛趣状态 /商城状态 /盛趣签到 /商城签到 /盛趣改名 /商城改名 /盛趣解绑 /商城解绑
-""",
-    "二游": """Yoine 菜单：二游
-
-森空岛
-/skdhelp
-/skdlogin <token>  （私聊）
-/skdlogout
-/skdusers
-/skd
-
-鸣潮 / GsCore（命令前缀：ww）
-ww帮助  （鸣潮完整帮助图）
-ww签到帮助
-ww登录  （库街区登录，建议私聊）
-ww邮箱登录  （国际服登录）
-ww签到
-ww开启自动签到 / ww关闭自动签到
-ww全部签到  （管理员/私聊）
-ww订阅签到结果
-ww取消订阅签到结果
-ww刷新绑定
-ww体力  别名：wwmr
-ww抽卡帮助
-ww更新抽卡记录
-ww抽卡记录
-ww订阅公告 / ww取消订阅公告
-更多面板、深塔、角色、Wiki、排行命令见：ww帮助
 """,
     "推送": """Yoine 菜单：推送与链接
 
@@ -123,12 +95,18 @@ X 推送
 /x推送关
 /x翻译状态
 
-Bilibili
-/bili_card_style  别名：/卡片样式
-/bili_sub UID [过滤器]  别名：/订阅动态
-/bili_sub_list  别名：/订阅列表
-/bili_sub_del UID  别名：/订阅删除
-/bili_sub_test UID  别名：/订阅测试
+B站动态订阅
+/bili_help
+/bili_sub UID [关键词]
+/bili_sub_list
+/bili_sub_del UID
+/bili_sub_test UID
+/bili_sub_on
+/bili_sub_off
+/bili_bind  （请私聊发送 Cookie）
+/bili_status
+/bili_unbind
+别名：/B站帮助 /B站绑定 /B站状态 /B站解绑 /订阅动态 /订阅列表 /订阅删除 /订阅测试
 
 QQ 分享链接
 /分享链接帮助
@@ -143,25 +121,10 @@ QQ 分享链接
 ADMIN_INDEX = """Yoine 管理菜单
 
 /yoine 管理运维  NS 运维、HAPI
-/yoine 管理插件  Bilibili 管理、GsCore 连接
 """
 
 
 ADMIN_PRIVATE_MENU_PARTS = {
-    "管理插件": """Yoine 管理菜单：插件
-
-Bilibili 管理
-/bili_login
-/bili_logout
-/bili_global_sub 会话 UID [过滤器]  （管理员）
-/bili_global_list  （管理员）
-/bili_global_del 会话  （管理员）
-
-GsCore / Sayu
-/连接core
-/链接core
-具体游戏功能命令由 GsCore 插件决定。
-""",
     "管理运维": """Yoine 管理菜单：运维
 
 HAPI 远程控制（管理员；已安装，启用后可用）
@@ -218,21 +181,18 @@ ALIASES = {
     "账号": "签到",
     "绑定": "签到",
     "签到": "签到",
-    "二游": "二游",
-    "游戏": "二游",
-    "森空岛": "二游",
-    "鸣潮": "二游",
     "推送": "推送",
     "订阅": "推送",
     "日程": "推送",
     "github": "推送",
     "GitHub": "推送",
+    "b站": "推送",
+    "B站": "推送",
+    "bili": "推送",
     "仓库": "推送",
     "链接": "推送",
     "管理": "管理",
     "admin": "管理",
-    "管理插件": "管理插件",
-    "插件": "管理插件",
     "管理运维": "管理运维",
     "运维": "管理运维",
 }

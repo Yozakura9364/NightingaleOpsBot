@@ -1,0 +1,89 @@
+{
+  "weibo_rss_base_url": {
+    "description": "weibo-rss 基础地址",
+    "type": "string",
+    "default": "http://docker-weibo-rss:3000",
+    "hint": "推荐把 weibo-rss 容器接入 AstrBot 所在的 nightingale-bot 网络后使用容器名访问。"
+  },
+  "enabled": {
+    "description": "启用后台轮询推送",
+    "type": "bool",
+    "default": true
+  },
+  "poll_interval_minutes": {
+    "description": "轮询间隔分钟",
+    "type": "int",
+    "default": 10,
+    "hint": "插件会强制不低于 5 分钟。"
+  },
+  "max_items_per_poll": {
+    "description": "每个 UID 每次最多推送条数",
+    "type": "int",
+    "default": 3
+  },
+  "initial_backfill_items": {
+    "description": "新增订阅时立即展示的最新条数",
+    "type": "int",
+    "default": 1
+  },
+  "include_images": {
+    "description": "推送正文后单独发送图片",
+    "type": "bool",
+    "default": false,
+    "hint": "默认关闭，先以稳定文字推送为主。开启后会下载图片再发送。"
+  },
+  "group_use_forward": {
+    "description": "群聊使用合并转发",
+    "type": "bool",
+    "default": true,
+    "hint": "开启后，群聊中的微博测试和后台推送会优先合并成一条转发消息，减少刷屏。"
+  },
+  "forward_display_name": {
+    "description": "合并转发显示名",
+    "type": "string",
+    "default": "Yoine♡"
+  },
+  "forward_display_uin": {
+    "description": "合并转发显示 QQ 号",
+    "type": "string",
+    "default": "1756507015",
+    "hint": "默认使用当前机器人 QQ。NapCat/QQ 侧如果更换账号，这里也需要一起改。"
+  },
+  "max_images_per_post": {
+    "description": "每条更新最多发送图片数",
+    "type": "int",
+    "default": 3
+  },
+  "image_proxy_url": {
+    "description": "图片下载代理",
+    "type": "string",
+    "default": "",
+    "hint": "微博图片下载不通时再配置，例如 http://172.19.0.1:7890。"
+  },
+  "image_download_timeout_seconds": {
+    "description": "图片下载超时秒数",
+    "type": "int",
+    "default": 20
+  },
+  "max_image_bytes": {
+    "description": "单张图片最大下载字节数",
+    "type": "int",
+    "default": 8000000
+  },
+  "admin_user_ids": {
+    "description": "允许管理订阅的 QQ 号",
+    "type": "string",
+    "default": "",
+    "hint": "逗号分隔。留空表示不限制。"
+  },
+  "failure_notice_threshold": {
+    "description": "连续失败多少次后在日志中升级为警告",
+    "type": "int",
+    "default": 6
+  },
+  "max_output_chars": {
+    "description": "单条消息最大输出长度",
+    "type": "int",
+    "default": 1800
+  }
+}

@@ -28,7 +28,7 @@ NightingaleOpsBot 是夜莺不语相关服务的私有 QQ Bot 和运维自动化
 - `docs/ns-health-runbook.md`：`/ns health`、每日状态报告和自动告警维护文档。
 - `docs/share-link-resolver-runbook.md`：QQ 分享卡片原始链接解析维护文档。
 - `docs/tencent-cloud-traffic-runbook.md`：腾讯云轻量应用服务器流量日报维护文档。
-- `docs/x-feed-plugin-plan.md`：X/RSSHub 推送插件维护文档。
+- `docs/x-feed-twikit-runbook.md`：X/Twikit 推送插件维护文档。
 
 本仓库与 `NightingaleSilenceWebV2` 分离。Bot 代码本机放在 `H:\NightingaleSilenceWeb\NightingaleOpsBot`，服务器放在 `/opt/nightingale/NightingaleOpsBot`，不要移动回 V2。
 
@@ -219,11 +219,31 @@ USER_AGENT: Mozilla/5.0 ...
 
 盛趣积分商城签到是独立 AstrBot 插件。它允许 QQ 用户在私聊中绑定自己的叨鱼凭据，然后手动执行盛趣积分商城签到或接收每日自动签到结果。
 
-私聊绑定格式：
+私聊扫码绑定：
 
 ```text
 /盛趣商城绑定
 /盛趣商城绑定 小号1
+```
+
+扫码绑定会优先保存可复用的叨鱼登录态；如果官方登录只返回短期商城 session，会保存短期 session 作为兜底，过期后需要重新扫码或改用手工绑定。
+
+手工绑定兜底格式：
+
+```text
+/盛趣商城绑定
+/盛趣商城绑定 小号1
+SESSION_ID: login-xxxxxxxx
+MEMBER_ID: 1795361933
+
+或
+
+DAOYU_KEY: DY_...
+USER_ID: 807483
+NICKNAME: sdo807483
+
+或
+
 DAOYU_KEY: DY_...
 SHOW_USERNAME: 138****1234
 ```
@@ -258,7 +278,7 @@ SHOW_USERNAME: 138****1234
 凭据存储：
 
 - 存在 `astrbot_plugin_sqmall_sign` 插件目录的 `.local/` 下。
-- SQLite 中加密保存 `DAOYU_KEY`，明文保存 `SHOW_USERNAME`。
+- SQLite 中加密保存 `DAOYU_KEY` 或 `SESSION_ID`，并保存对应的身份字段（`MEMBER_ID`、`SHOW_USERNAME` 或 `NICKNAME/USER_ID`）。
 - 加密密钥本地生成为 `.local/secret.key`。
 - 这些运行文件不提交到仓库。
 - 群聊只返回引导，不接受 `DAOYU_KEY`。
@@ -267,13 +287,13 @@ SHOW_USERNAME: 138****1234
 
 ### X 动态推送
 
-X 动态推送是低频更新插件。它通过 RSSHub 读取 X 时间线，把 last-seen 状态保存到插件本地 SQLite，并推送到执行订阅命令的 QQ 私聊或群聊。
+X 动态推送是低频更新插件。它通过 Twikit 读取 X 时间线，把 last-seen 状态保存到插件本地 SQLite，并推送到执行订阅命令的 QQ 私聊或群聊。
 
 当前生产链路：
 
 ```text
-RSSHub -> astrbot_plugin_x_feed -> 可选 LLM 翻译 -> QQ 文本/链接
-RSSHub 图片 URL -> 代理下载 -> 本地图片文件 -> QQ 图片
+astrbot_plugin_x_feed -> Twikit -> 可选 LLM 翻译 -> QQ 文本/链接
+X 图片 URL -> 代理下载 -> 本地图片文件 -> QQ 图片
 ```
 
 常用命令：
@@ -297,13 +317,12 @@ RSSHub 图片 URL -> 代理下载 -> 本地图片文件 -> QQ 图片
 
 运行注意事项：
 
-- RSSHub 凭据在 `/opt/nightingale/astrbot/rsshub.env`，不要打印或提交。
-- 当前可用 X 链路使用 `TWITTER_AUTH_TOKEN`，不是付费 X API。
-- 本机 Windows `127.0.0.1:7890` 代理和 SSH 反向隧道是图片/X 访问链路的一部分。
-- 隧道使用 `scripts/start-xproxy-tunnel.ps1`、`scripts/status-xproxy-tunnel.ps1`、`scripts/stop-xproxy-tunnel.ps1` 管理。
+- 当前可用 X 链路使用 Twikit + 本地导出的 cookies，不是付费 X API。
+- 服务器通过 Tailscale 访问你的 Windows 本机代理 `http://100.74.24.101:7890`。
+- 只要你的电脑关机、本机代理没开、Tailscale 掉线，X 推送就会一起失效。
 - 生产环境当前启用了翻译。翻译使用 AstrBot LLM provider，目标语言为简体中文，保留原文；翻译失败时回退到原文。可用 `/x翻译状态` 验证。
 
-完整维护流程见 `docs/x-feed-plugin-plan.md`。
+完整维护流程见 `docs/x-feed-twikit-runbook.md`。
 
 ### 日程提醒
 

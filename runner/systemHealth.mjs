@@ -3,7 +3,7 @@ import { cpus, loadavg } from 'node:os'
 import tls from 'node:tls'
 import { getTencentCloudTrafficSnapshot } from './tencentCloudTraffic.mjs'
 
-const DEFAULT_CONTAINERS = ['astrbot', 'napcat', 'gsuid_core', 'rsshub']
+const DEFAULT_CONTAINERS = ['astrbot', 'napcat', 'rsshub']
 const DEFAULT_SERVICES = [
   'nightingale-ops-runner',
   'nsglamour',
@@ -13,7 +13,6 @@ const DEFAULT_SERVICES = [
 const DEFAULT_HTTP_TARGETS = [
   ['AstrBot', 'http://127.0.0.1:6185/'],
   ['NapCat', 'http://127.0.0.1:6099/'],
-  ['GsCore', 'http://127.0.0.1:8764/'],
   ['NSGlamour', 'http://127.0.0.1:8765/']
 ]
 

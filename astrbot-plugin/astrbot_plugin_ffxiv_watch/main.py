@@ -1,14 +1,18 @@
 from __future__ import annotations
 
 import asyncio
+from hashlib import sha256
 from pathlib import Path
+from urllib.error import URLError
+from urllib.parse import urlparse
+from urllib.request import Request, build_opener
 
 from astrbot.api import AstrBotConfig, logger
 from astrbot.api.event import AstrMessageEvent, MessageChain, filter
 import astrbot.api.message_components as Comp
 from astrbot.api.star import Context, Star, register
 
-from .sources import SOURCES, WatchItem, fetch_source, list_sources, source_ids_for_kind
+from .sources import SOURCES, USER_AGENT, WatchItem, fetch_source, list_sources, source_ids_for_kind
 from .storage import FFXIVWatchStore
 
 
@@ -108,6 +112,8 @@ class FFXIVWatchPlugin(Star):
         super().__init__(context)
         self.config = config
         self.data_dir = Path(__file__).resolve().parent / ".local"
+        self.image_dir = self.data_dir / "images"
+        self.image_dir.mkdir(parents=True, exist_ok=True)
         self.store = FFXIVWatchStore(self.data_dir)
         self.max_output_chars = int(self.config.get("max_output_chars", 3000) or 3000)
         self._poll_task: asyncio.Task | None = None
@@ -149,6 +155,12 @@ class FFXIVWatchPlugin(Star):
 
     def _failure_notice_threshold(self) -> int:
         return max(1, int(self.config.get("failure_notice_threshold", 3) or 3))
+
+    def _image_download_timeout_seconds(self) -> int:
+        return max(5, min(30, self._request_timeout_seconds()))
+
+    def _max_image_bytes(self) -> int:
+        return 8 * 1024 * 1024
 
     def _enabled_source_ids(self) -> list[str]:
         configured = _split_ids(self.config.get("enabled_sources", "cn-news,cn-notice,jp-news,cn-store,tw-store,jp-store"))
@@ -242,25 +254,97 @@ class FFXIVWatchPlugin(Star):
     async def _send_to_origin(self, origin: str, text: str) -> None:
         await self.context.send_message(origin, MessageChain([Comp.Plain(_clamp(text, self.max_output_chars))]))
 
+    def _can_inline_image(self, item: WatchItem | None) -> bool:
+        return bool(item and self._include_images() and item.image and self._max_images_per_item() > 0)
+
+    def _build_item_message_chain(self, text: str, image_path: str = "") -> MessageChain:
+        components: list = [Comp.Plain(_clamp(text, self.max_output_chars))]
+        if image_path:
+            components.append(Comp.Image.fromFileSystem(image_path))
+        return MessageChain(components)
+
+    async def _download_item_image(self, item: WatchItem | None) -> str:
+        if not self._can_inline_image(item):
+            return ""
+        return await asyncio.to_thread(self._download_item_image_sync, item.image)
+
+    def _download_item_image_sync(self, image_url: str) -> str:
+        parsed = urlparse(image_url)
+        if parsed.scheme not in {"http", "https"}:
+            raise ValueError("invalid image url scheme")
+
+        suffix = Path(parsed.path).suffix.lower()
+        extension = suffix if suffix in {".jpg", ".jpeg", ".png", ".gif", ".webp"} else ".jpg"
+        if extension == ".jpeg":
+            extension = ".jpg"
+        target = self.image_dir / f"{sha256(image_url.encode('utf-8')).hexdigest()[:24]}{extension}"
+        if target.exists() and 0 < target.stat().st_size <= self._max_image_bytes():
+            return str(target)
+
+        request = Request(image_url, headers={"User-Agent": USER_AGENT})
+        opener = build_opener()
+        try:
+            with opener.open(request, timeout=self._image_download_timeout_seconds()) as response:
+                content_type = str(response.headers.get("Content-Type", ""))
+                if not content_type.lower().startswith("image/"):
+                    raise RuntimeError(f"unexpected image content type: {content_type}")
+                data = response.read(self._max_image_bytes() + 1)
+        except URLError as error:
+            raise RuntimeError(f"image download failed: {error.reason}") from error
+
+        if not data:
+            raise RuntimeError("image payload is empty")
+        if len(data) > self._max_image_bytes():
+            raise RuntimeError("image payload is too large")
+
+        target.write_bytes(data)
+        return str(target)
+
+    async def _send_image_path_to_origin(self, origin: str, image_path: str) -> None:
+        if not origin or not image_path:
+            return
+        await self.context.send_message(origin, MessageChain([Comp.Image.fromFileSystem(image_path)]))
+
+    async def _send_image_path_to_event(self, event: AstrMessageEvent, image_path: str) -> None:
+        if not image_path:
+            return
+        await event.send(MessageChain([Comp.Image.fromFileSystem(image_path)]))
+
     async def _send_item_to_origin(self, origin: str, text: str, item: WatchItem) -> None:
-        await self._send_to_origin(origin, text)
-        await self._send_item_images_to_origin(origin, item)
-
-    async def _send_item_images_to_origin(self, origin: str, item: WatchItem) -> None:
-        if not origin or not self._include_images() or not item.image or self._max_images_per_item() <= 0:
+        if not origin:
             return
+        image_path = ""
+        if self._can_inline_image(item):
+            try:
+                image_path = await self._download_item_image(item)
+            except Exception as error:
+                logger.warning("FF14 watch image download failed for %s: %s", item.url, error)
         try:
-            await self.context.send_message(origin, MessageChain([Comp.Image.fromURL(item.image)]))
+            await self.context.send_message(origin, self._build_item_message_chain(text, image_path))
         except Exception as error:
-            logger.warning("FF14 watch image send failed for %s: %s", item.url, error)
+            if image_path:
+                logger.warning("FF14 watch mixed send failed for %s: %s", item.url, error)
+                await self._send_to_origin(origin, text)
+                await self._send_image_path_to_origin(origin, image_path)
+                return
+            raise
 
-    async def _send_item_images_to_event(self, event: AstrMessageEvent, item: WatchItem) -> None:
-        if not self._include_images() or not item.image or self._max_images_per_item() <= 0:
-            return
+    async def _send_item_to_event(self, event: AstrMessageEvent, text: str, item: WatchItem | None = None) -> None:
+        image_path = ""
+        if self._can_inline_image(item):
+            try:
+                image_path = await self._download_item_image(item)
+            except Exception as error:
+                logger.warning("FF14 watch command image download failed for %s: %s", item.url, error)
         try:
-            await event.send(MessageChain([Comp.Image.fromURL(item.image)]))
+            await event.send(self._build_item_message_chain(text, image_path))
         except Exception as error:
-            logger.warning("FF14 watch command image send failed for %s: %s", item.url, error)
+            if image_path:
+                logger.warning("FF14 watch command mixed send failed for %s: %s", item.url, error)
+                await event.send(MessageChain([Comp.Plain(_clamp(text, self.max_output_chars))]))
+                await self._send_image_path_to_event(event, image_path)
+                return
+            raise
 
     def _format_item(self, item: WatchItem) -> str:
         kind_label = "新闻更新" if item.kind == "news" else "商城详情变更"
@@ -284,11 +368,11 @@ class FFXIVWatchPlugin(Star):
         if not items:
             return f"{source.label}：没有抓到条目。"
         if source.kind == "store":
-            lines = [f"{source.label}：详情页监控样例，抓到 {len(items)} 条，显示前 3 条"]
+            lines = [f"{source.label}：详情页监控样例，抓到 {len(items)} 条，显示前 1 条"]
             lines.append("说明：这不是新品上架列表，只用于验证当前详情页解析和配图。")
         else:
-            lines = [f"{source.label}：抓到 {len(items)} 条，显示前 3 条"]
-        for item in items[:3]:
+            lines = [f"{source.label}：抓到 {len(items)} 条，显示前 1 条"]
+        for item in items[:1]:
             lines.append("")
             lines.append(self._format_item(item))
         return "\n".join(lines)
@@ -363,9 +447,7 @@ class FFXIVWatchPlugin(Star):
                         first_image_item = next((item for item in items if item.image), None)
                 except Exception as error:
                     lines.append(f"{source_id} 测试失败：{error}")
-            await event.send(MessageChain([Comp.Plain(_clamp("\n\n".join(lines), self.max_output_chars))]))
-            if first_image_item:
-                await self._send_item_images_to_event(event, first_image_item)
+            await self._send_item_to_event(event, "\n\n".join(lines), first_image_item)
             return
 
         if sub in {"source", "源", "来源"}:

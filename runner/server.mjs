@@ -11,6 +11,7 @@ import {
 import {
   cancelSqmallQrLoginSession,
   cleanupExpiredSqmallQrSessions,
+  refreshSqmallBrowserCredential,
   getSqmallQrLoginImage,
   getSqmallQrLoginStatus,
   startSqmallQrLoginSession
@@ -175,6 +176,12 @@ async function handleRequest(request, response) {
     if (request.method === 'POST' && pathname === '/sqmall/qr/start') {
       const payload = await readBody(request)
       sendJson(response, 200, { ok: true, session: await startSqmallQrLoginSession(payload) })
+      return
+    }
+
+    if (request.method === 'POST' && pathname === '/sqmall/browser/refresh') {
+      const payload = await readBody(request)
+      sendJson(response, 200, { ok: true, session: await refreshSqmallBrowserCredential(payload) })
       return
     }
 

@@ -68,12 +68,25 @@ def _command_argument(text: str, commands: tuple[str, ...]) -> str:
         "DAOYUKEY",
         "DY_KEY",
         "DaoyuKey",
+        "SESSION_ID",
+        "SESSIONID",
         "SHOW_USERNAME",
         "SHOWUSERNAME",
         "ShowUsername",
+        "NICKNAME",
+        "USER_ID",
+        "USERID",
+        "MEMBER_ID",
+        "MEMBERID",
+        "DISPLAY_NAME",
+        "DISPLAYNAME",
         "叨鱼KEY",
         "叨鱼Key",
         "手机号",
+        "昵称",
+        "用户ID",
+        "商城会话",
+        "会员ID",
     )
     if first_line and not any(first_line.lower().startswith(prefix.lower()) for prefix in sensitive_prefixes):
         return first_line
@@ -111,10 +124,42 @@ def _normalize_show_username(value: str) -> str:
     return raw
 
 
+def _normalize_nickname(value: str) -> str:
+    raw = value.strip()
+    if len(raw) < 2:
+        raise ValueError("NICKNAME 看起来过短，请填写网页请求里的 nickname。")
+    return raw
+
+
+def _normalize_user_id(value: str) -> str:
+    raw = value.strip()
+    if not raw.isdigit():
+        raise ValueError("USER_ID 格式不正确，应为纯数字。")
+    return raw
+
+
+def _normalize_session_id(value: str) -> str:
+    raw = value.strip()
+    if len(raw) < 16:
+        raise ValueError("SESSION_ID 看起来过短，请填写网页请求里的 sessionId。")
+    return raw
+
+
+def _normalize_member_id(value: str) -> str:
+    raw = value.strip()
+    if not raw.isdigit():
+        raise ValueError("MEMBER_ID 格式不正确，应为纯数字。")
+    return raw
+
+
 def _has_manual_credentials(text: str) -> bool:
     return bool(
-        _extract_field(text, ("DAOYU_KEY", "DAOYUKEY", "DY_KEY", "DaoyuKey", "叨鱼KEY", "叨鱼Key"))
+        _extract_field(text, ("SESSION_ID", "SESSIONID", "sessionId", "商城会话"))
+        or _extract_field(text, ("MEMBER_ID", "MEMBERID", "memberId", "会员ID"))
+        or _extract_field(text, ("DAOYU_KEY", "DAOYUKEY", "DY_KEY", "DaoyuKey", "叨鱼KEY", "叨鱼Key"))
         or _extract_field(text, ("SHOW_USERNAME", "SHOWUSERNAME", "ShowUsername", "showusername", "手机号"))
+        or _extract_field(text, ("NICKNAME", "nickname", "昵称"))
+        or _extract_field(text, ("USER_ID", "USERID", "user_id", "用户ID", "用户Id"))
     )
 
 
@@ -126,10 +171,18 @@ def _help_text() -> str:
             "私聊扫码绑定：",
             "/盛趣商城绑定 [槽位名]",
             "机器人会发送二维码，请用叨鱼或微信扫码并确认登录。",
+            "扫码绑定会保存独立网页登录态，后续签到前会刷新商城 session。",
             "",
             "手工绑定兜底：",
             "/盛趣商城绑定 [槽位名]",
+            "SESSION_ID: login-xxxxxxxx",
+            "MEMBER_ID: 1795361933",
+            "",
+            "兼容旧格式：",
             "DAOYU_KEY: DY_...",
+            "USER_ID: 807483",
+            "NICKNAME: sdo807483",
+            "或",
             "SHOW_USERNAME: 138****1234",
             "",
             "常用命令：",
@@ -147,8 +200,6 @@ def _help_text() -> str:
             "群里发送“/盛趣商城签到”只会提示私聊绑定，不会接收账号凭证。",
         ]
     )
-
-
 def _slot_not_found_text(slot: str) -> str:
     if slot in {"名字", "槽位名", "[名字]", "[槽位名]"}:
         return (
@@ -205,6 +256,43 @@ class SqmallSignPlugin(Star):
             return
         await self.context.send_message(private_origin, MessageChain([Comp.Plain(text)]))
 
+    async def _refresh_browser_state_credential(
+        self,
+        user_id: str,
+        slot: str,
+        private_origin: str,
+        credential,
+    ) -> tuple[str, str, str]:
+        if not self.qr_client.configured:
+            raise RuntimeError("runner 未配置，无法刷新盛趣商城扫码登录态")
+
+        response = await self.qr_client.refresh_browser_state(credential.secret)
+        if not response.get("ok"):
+            raise RuntimeError(response.get("error") or "runner 刷新盛趣商城登录态失败")
+
+        session = response.get("session") or {}
+        if session.get("status") != "success" or not session.get("loggedIn"):
+            result_msg = ((session.get("loginState") or {}).get("resultMsg") or "").strip()
+            raise RuntimeError(result_msg or "扫码登录态已失效，请重新扫码绑定")
+
+        refreshed = session.get("credential") or {}
+        browser_state = str(refreshed.get("browserState") or "").strip()
+        session_id = str(refreshed.get("sessionId") or "").strip()
+        member_id = str(refreshed.get("memberId") or credential.member_id or "").strip()
+        display_name = str(refreshed.get("displayName") or credential.show_username or member_id).strip()
+        if not browser_state or not session_id or not member_id:
+            raise RuntimeError("runner 已登录，但没有返回完整的商城会话凭证")
+
+        self.store.bind_browser_state(
+            user_id,
+            private_origin,
+            browser_state,
+            member_id,
+            display_name,
+            slot=slot,
+        )
+        return session_id, member_id, display_name
+
     async def _run_for_user(
         self,
         user_id: str,
@@ -212,12 +300,28 @@ class SqmallSignPlugin(Star):
         slot: str = DEFAULT_SLOT,
         auto_date: str | None = None,
     ) -> tuple[bool, str]:
+        account = self.store.get_account(user_id, slot)
+        if not account:
+            return False, _slot_not_found_text(slot)
         credential = self.store.get_credential(user_id, slot)
         if not credential:
             return False, _slot_not_found_text(slot)
 
         try:
-            if credential.kind == "sqmall-session":
+            if credential.kind == "sqmall-browser-state":
+                session_id, member_id, display_name = await self._refresh_browser_state_credential(
+                    user_id,
+                    slot,
+                    account.private_origin,
+                    credential,
+                )
+                result = await asyncio.to_thread(
+                    run_sqmall_session_sign,
+                    session_id,
+                    member_id,
+                    display_name,
+                )
+            elif credential.kind == "sqmall-session":
                 result = await asyncio.to_thread(
                     run_sqmall_session_sign,
                     credential.secret,
@@ -229,6 +333,7 @@ class SqmallSignPlugin(Star):
                     run_sqmall_sign,
                     credential.secret,
                     credential.show_username,
+                    credential.member_id,
                 )
             message = result.summary
             self.store.update_result(user_id, slot=slot, ok=result.ok, message=message, auto_date=auto_date)
@@ -297,17 +402,68 @@ class SqmallSignPlugin(Star):
             return
 
         daoyu_key = _extract_field(text, ("DAOYU_KEY", "DAOYUKEY", "DY_KEY", "DaoyuKey", "叨鱼KEY", "叨鱼Key"))
+        session_secret = _extract_field(text, ("SESSION_ID", "SESSIONID", "sessionId", "商城会话"))
+        member_id = _extract_field(text, ("MEMBER_ID", "MEMBERID", "memberId", "会员ID"))
+        display_name = _extract_field(text, ("DISPLAY_NAME", "DISPLAYNAME", "displayName", "昵称", "账号"))
         show_username = _extract_field(
             text,
             ("SHOW_USERNAME", "SHOWUSERNAME", "ShowUsername", "showusername", "手机号"),
         )
-        if not daoyu_key or not show_username:
+        nickname = _extract_field(text, ("NICKNAME", "nickname", "昵称"))
+        user_id = _extract_field(text, ("USER_ID", "USERID", "user_id", "用户ID", "用户Id"))
+        if session_secret or member_id:
+            if not session_secret or not member_id:
+                yield event.plain_result("使用网页会话绑定时，请同时填写 SESSION_ID 和 MEMBER_ID。")
+                return
+            try:
+                normalized_session_id = _normalize_session_id(session_secret)
+                normalized_member_id = _normalize_member_id(member_id)
+            except ValueError as error:
+                yield event.plain_result(str(error))
+                return
+
+            origin = _private_origin(event)
+            if not origin:
+                yield event.plain_result("当前私聊来源无法记录，请稍后重试。")
+                return
+
+            normalized_display_name = str(display_name or "").strip() or "盛趣商城账号"
+            self.store.bind_session(
+                str(event.get_sender_id()),
+                origin,
+                normalized_session_id,
+                normalized_member_id,
+                normalized_display_name,
+                slot=slot,
+            )
+            yield event.plain_result(
+                "\n".join(
+                    [
+                        "盛趣商城绑定成功。",
+                        f"槽位：{slot}",
+                        f"MEMBER_ID：{normalized_member_id}",
+                        "已保存网页 session，会话过期后需要重新获取。",
+                    ]
+                )
+            )
+            return
+
+        if not daoyu_key or not (show_username or nickname or user_id):
             yield event.plain_result(_help_text())
             return
 
         try:
             normalized_daoyu_key = _normalize_daoyu_key(daoyu_key)
-            normalized_show_username = _normalize_show_username(show_username)
+            if nickname or user_id:
+                if not nickname or not user_id:
+                    raise ValueError("使用网页请求绑定时，请同时填写 USER_ID 和 NICKNAME。")
+                normalized_identity = _normalize_nickname(nickname)
+                normalized_user_id = _normalize_user_id(user_id)
+                identity_label = "NICKNAME"
+            else:
+                normalized_identity = _normalize_show_username(show_username)
+                normalized_user_id = ""
+                identity_label = "SHOW_USERNAME"
         except ValueError as error:
             yield event.plain_result(str(error))
             return
@@ -321,7 +477,8 @@ class SqmallSignPlugin(Star):
             str(event.get_sender_id()),
             origin,
             normalized_daoyu_key,
-            normalized_show_username,
+            normalized_identity,
+            member_id=normalized_user_id,
             slot=slot,
         )
         yield event.plain_result(
@@ -329,7 +486,7 @@ class SqmallSignPlugin(Star):
                 [
                     "盛趣商城绑定成功。",
                     f"槽位：{slot}",
-                    f"ShowUsername：{normalized_show_username}",
+                    f"{identity_label}：{normalized_identity}",
                     "之后可以私聊发送“/盛趣商城签到”，自动签到也会每日执行。",
                 ]
             )
@@ -402,6 +559,58 @@ class SqmallSignPlugin(Star):
                         continue
 
                     credential = status_session.get("credential") or {}
+                    credential_kind = str(credential.get("kind") or "").strip()
+                    if credential_kind == "sqmall-browser-state":
+                        browser_state = str(credential.get("browserState") or "").strip()
+                        session_secret = str(credential.get("sessionId") or "").strip()
+                        member_id = str(credential.get("memberId") or "").strip()
+                        display_name = str(credential.get("displayName") or "").strip() or "盛趣商城账号"
+                        if not browser_state or not session_secret or not member_id:
+                            yield event.plain_result("扫码已登录，但没有拿到完整的商城登录态，请稍后重试。")
+                            return
+
+                        self.store.bind_browser_state(
+                            str(event.get_sender_id()),
+                            origin,
+                            browser_state,
+                            member_id,
+                            display_name,
+                            slot=slot,
+                        )
+                        yield event.plain_result(
+                            "\n".join(
+                                [
+                                    "盛趣商城扫码绑定成功。",
+                                    f"槽位：{slot}",
+                                    f"账号：{display_name}",
+                                    "已保存独立扫码登录态，后续签到会先刷新商城 session。",
+                                ]
+                            )
+                        )
+                        return
+
+                    if credential_kind == "daoyu":
+                        daoyu_key = _normalize_daoyu_key(str(credential.get("daoyuKey") or ""))
+                        show_username = _normalize_show_username(str(credential.get("showUsername") or ""))
+                        self.store.bind(
+                            str(event.get_sender_id()),
+                            origin,
+                            daoyu_key,
+                            show_username,
+                            slot=slot,
+                        )
+                        yield event.plain_result(
+                            "\n".join(
+                                [
+                                    "盛趣商城扫码绑定成功。",
+                                    f"槽位：{slot}",
+                                    f"账号：{show_username}",
+                                    "已保存叨鱼凭据。",
+                                ]
+                            )
+                        )
+                        return
+
                     session_secret = str(credential.get("sessionId") or "").strip()
                     member_id = str(credential.get("memberId") or "").strip()
                     display_name = str(credential.get("displayName") or "").strip() or "盛趣商城账号"
@@ -423,12 +632,11 @@ class SqmallSignPlugin(Star):
                                 "盛趣商城扫码绑定成功。",
                                 f"槽位：{slot}",
                                 f"账号：{display_name}",
-                                "之后可以私聊发送“/盛趣商城签到”，自动签到也会每日执行。",
+                                "当前只拿到短期商城 session，过期后需要重新扫码。",
                             ]
                         )
                     )
                     return
-
                 ticket_captured = bool(last_status_session.get("ticketCaptured"))
                 mall_attempted = bool(last_status_session.get("mallSessionAttempted"))
                 if not ticket_captured:
@@ -534,7 +742,10 @@ class SqmallSignPlugin(Star):
             return
 
         user_id = str(event.get_sender_id())
-        if slot == DEFAULT_SLOT and not _command_argument(event.message_str or "", ("盛趣商城状态", "盛趣状态", "商城状态")):
+        if slot == DEFAULT_SLOT and not _command_argument(
+            event.message_str or "",
+            ("盛趣商城状态", "盛趣状态", "商城状态"),
+        ):
             accounts = self.store.list_user_accounts(user_id)
             if not accounts:
                 yield event.plain_result("你还没有绑定盛趣商城。私聊发送“/盛趣商城绑定”查看格式。")
@@ -556,11 +767,16 @@ class SqmallSignPlugin(Star):
             return
 
         status = "未运行" if account.last_ok is None else ("成功" if account.last_ok else "失败")
+        bind_method = (
+            "扫码保活"
+            if account.credential_kind == "sqmall-browser-state"
+            else ("扫码 session" if account.credential_kind == "sqmall-session" else "叨鱼 KEY")
+        )
         lines = [
             "盛趣商城绑定状态：已绑定",
             f"槽位：{account.slot}",
             f"账号：{account.show_username}",
-            f"绑定方式：{'扫码' if account.credential_kind == 'sqmall-session' else '叨鱼 KEY'}",
+            f"绑定方式：{bind_method}",
             f"更新时间：{account.updated_at}",
             f"上次运行：{account.last_run_at or '-'}",
             f"上次结果：{status}",
@@ -568,7 +784,6 @@ class SqmallSignPlugin(Star):
         if account.last_message:
             lines.extend(["", _clamp(account.last_message, 600)])
         yield event.plain_result(_clamp("\n".join(lines), self.max_output_chars))
-
     @filter.command("盛趣状态")
     async def sqmall_status_short(self, event: AstrMessageEvent):
         async for result in self.sqmall_status(event):

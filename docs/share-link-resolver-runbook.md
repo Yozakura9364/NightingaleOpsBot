@@ -37,6 +37,7 @@ Runtime data:
 
 ```text
 astrbot_plugin_share_link_resolver/.local/cards/
+astrbot_plugin_share_link_resolver/.local/emoji/
 astrbot_plugin_share_link_resolver/.local/fonts/
 astrbot_plugin_share_link_resolver/.local/nga_cookies.json
 ```
@@ -97,14 +98,72 @@ Current platform-specific behavior:
 
 - Xiaohongshu: rewrites mobile discovery item links into a PC-share style link
   while preserving required `xsec_token` data.
+- Miyoushe, TapTap, Xiaoheihe, and KuroBBS: rich article extraction. The
+  plugin tries lightweight public web/API routes to extract the main post text,
+  author metadata, and several inline images, then renders a main-post card.
+  Failure falls back to the generic QQ share-card image.
 - NGA: can fetch the linked thread page and generate a readable preview card.
   Current rendering supports main post, page-highlighted hot replies when
   present, basic metadata, NGA smiley images, and attachment images.
+- Miyoushe: rewrites mobile article links whose article id is stored in the
+  `#/article/<id>` fragment into PC article links such as
+  `https://www.miyoushe.com/ys/article/<id>`.
 - Weibo and common web pages: best-effort title/description/cover extraction.
 - Other platforms: falls back to a generic link card or plain link.
 
 If card fetching or rendering fails, the plugin should degrade to a normal link
 instead of producing noisy user-facing errors.
+
+Text emoji in rendered cards are detected and drawn as cached Twemoji images
+under `.local/emoji/`. If the emoji CDN is unavailable or a glyph is not covered,
+the renderer falls back to normal font drawing.
+
+## Rich Card Plan
+
+The rich-card plan keeps this plugin focused on QQ share-card recovery, but
+allows cheap main-post extraction for platforms where a stable public web/API
+route is available.
+
+First batch:
+
+- Miyoushe: `getPostFull` article payload.
+- TapTap: topic detail payload.
+- Xiaoheihe: signed share-data payload when the share URL exposes a usable
+  `link_id`.
+
+Current first-batch verification:
+
+- Miyoushe is verified on the production container with a real article link.
+- TapTap is wired as best-effort, but the current production container receives
+  HTTP 405 from the tested topic detail endpoint and therefore falls back to the
+  generic card.
+- Xiaoheihe uses the current web `link/tree` route with generated request
+  signing. It also cleans App-local optimizer image paths and maps common
+  `[cube_...]` markers to simple emoji.
+- KuroBBS / 库街区 uses the anonymous `getPostDetail` route to render the main
+  post title, author, metadata, text, and several images.
+
+Second batch candidates:
+
+- Weibo: possible through mobile APIs, but cookie and risk-control behavior are
+  less stable.
+- Skland: the web app appears to use `https://zonai.skland.com/web/v2/item`,
+  but direct anonymous requests currently return a generic request error from
+  the server. Treat it as signed/request-constrained for now unless a stable
+  lightweight route is confirmed.
+
+Generic-only for now:
+
+- Xiaohongshu, Skland, Mihuashi, and Huajia should remain
+  QQ-card/title/cover based unless a stable lightweight route is confirmed.
+
+Rich cards must remain best-effort:
+
+- Limit text length, image count, and final image height.
+- Preserve the normal clickable link response.
+- Degrade to the generic card when extraction, parsing, image loading, or
+  platform APIs fail.
+- Do not require logged-in cookies for the first-batch extractors.
 
 ## Scope Boundary
 

@@ -86,6 +86,12 @@ def _int_config(config: AstrBotConfig, key: str, default: int, minimum: int = 1)
         return default
 
 
+def _platform_ignored(url: str, ignored_platforms: set[str]) -> bool:
+    if not ignored_platforms:
+        return False
+    return platform_label(url).strip().lower() in ignored_platforms
+
+
 def _event_group_id(event: AstrMessageEvent) -> str:
     return str(event.get_group_id() or "").strip()
 
@@ -148,6 +154,9 @@ def _clean_share_url(url: str, tracking_params: set[str]) -> str:
     xhs_url = _normalize_xiaohongshu_url(cleaned)
     if xhs_url:
         return xhs_url
+    miyoushe_url = _normalize_miyoushe_url(cleaned)
+    if miyoushe_url:
+        return miyoushe_url
     if not tracking_params:
         return cleaned
     parsed = urlparse(cleaned)
@@ -187,6 +196,29 @@ def _normalize_xiaohongshu_url(url: str) -> str:
             fragment="",
         )
     )
+
+
+def _normalize_miyoushe_url(url: str) -> str:
+    parsed = urlparse(url)
+    hostname = (parsed.hostname or "").lower()
+    if not (hostname == "miyoushe.com" or hostname.endswith(".miyoushe.com")):
+        return ""
+
+    path_parts = [part for part in parsed.path.split("/") if part]
+    channel = path_parts[0] if path_parts else ""
+    article_id = ""
+
+    if len(path_parts) >= 3 and path_parts[1] == "article" and path_parts[2].isdigit():
+        article_id = path_parts[2]
+    else:
+        fragment_parts = [part for part in parsed.fragment.split("/") if part]
+        if len(fragment_parts) >= 2 and fragment_parts[0] == "article" and fragment_parts[1].isdigit():
+            article_id = fragment_parts[1]
+
+    if not channel or not article_id:
+        return ""
+
+    return f"https://www.miyoushe.com/{channel}/article/{article_id}"
 
 
 def _domain_ignored(hostname: str, ignored_domains: set[str]) -> bool:
@@ -388,6 +420,18 @@ def _extract_first_description(payloads: list[Any]) -> str:
     return ""
 
 
+def _best_card_title(fetched: CardContent | None, payloads: list[Any], source: str) -> str:
+    payload_title = _extract_first_title(payloads)
+    fetched_title = _clean_title(fetched.title) if fetched else ""
+    if fetched_title and fetched_title != source and not _title_looks_like_http_error(fetched_title):
+        return fetched_title
+    return payload_title or fetched_title or source
+
+
+def _title_looks_like_http_error(value: str) -> bool:
+    return bool(re.fullmatch(r"[45]\d{2}(?:\s+\w+)?", _clean_title(value), flags=re.IGNORECASE))
+
+
 def _extract_description(value: Any, *, key: str = "") -> str:
     if isinstance(value, dict):
         for child_key, child_value in value.items():
@@ -567,6 +611,11 @@ class ShareLinkResolverPlugin(Star):
             max_links=_int_config(self.config, "max_links_per_message", 3),
             tracking_params=self._tracking_params(),
         )
+        links = [
+            link
+            for link in links
+            if not _platform_ignored(link, _split_items(self.config.get("ignored_platforms", "bilibili")))
+        ]
         if not links:
             if has_json_payload and _bool_config(self.config, "debug_log", False):
                 logger.info("QQ share link resolver found no usable links.")
@@ -577,7 +626,7 @@ class ShareLinkResolverPlugin(Star):
         if _bool_config(self.config, "stop_after_resolved", True):
             event.stop_event()
 
-        text = _format_links(links, str(self.config.get("reply_prefix", "解析到分享链接：") or ""), _extract_first_title(payloads))
+        text = _format_links(links, str(self.config.get("reply_prefix", "解析出直链：") or ""), _extract_first_title(payloads))
         images = []
         if _bool_config(self.config, "send_images", True):
             images = _extract_media_links(
@@ -630,7 +679,7 @@ class ShareLinkResolverPlugin(Star):
         try:
             source = platform_label(url)
             fetched: CardContent | None = None
-            if source in {"NGA", "微博"}:
+            if source in {"NGA", "微博", "米游社", "TapTap", "库街区", "小黑盒"}:
                 try:
                     timeout_seconds = _int_config(self.config, "fetch_timeout_seconds", 12)
                     max_bytes = _int_config(self.config, "fetch_max_bytes", 1500000, minimum=100000)
@@ -657,7 +706,7 @@ class ShareLinkResolverPlugin(Star):
             else:
                 content = CardContent(
                     source=source,
-                    title=(fetched.title if fetched else "") or _extract_first_title(payloads) or source,
+                    title=_best_card_title(fetched, payloads, source),
                     url=url,
                     description=(fetched.description if fetched else "") or _extract_first_description(payloads),
                     cover_url=(fetched.cover_url if fetched else "") or cover_url,

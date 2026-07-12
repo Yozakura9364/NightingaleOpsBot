@@ -1,0 +1,5 @@
+name: astrbot_plugin_bili_feed
+desc: B站 UID 低频轮询动态推送插件。
+version: 0.2.0
+author: NightingaleSilence
+repo: https://github.com/Yozakura9364/NightingaleOpsBot

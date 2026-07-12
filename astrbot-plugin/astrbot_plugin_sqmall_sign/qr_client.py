@@ -68,6 +68,16 @@ class SqmallQrClient:
                 if response.status >= 400:
                     await response.read()
 
+    async def refresh_browser_state(self, browser_state: str) -> dict:
+        timeout = aiohttp.ClientTimeout(total=90)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.post(
+                f"{self.endpoint}/sqmall/browser/refresh",
+                headers=self._headers(),
+                json={"browserState": browser_state},
+            ) as response:
+                return await self._read_json(response)
+
     @staticmethod
     async def _read_json(response: aiohttp.ClientResponse) -> dict:
         try:

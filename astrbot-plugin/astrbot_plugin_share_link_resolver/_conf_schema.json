@@ -106,7 +106,7 @@
   "reply_prefix": {
     "description": "回复前缀",
     "type": "string",
-    "default": "解析到分享链接："
+    "default": "解析出直链："
   },
   "stop_after_resolved": {
     "description": "解析成功后阻止后续插件继续处理",

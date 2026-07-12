@@ -36,7 +36,7 @@ H:\NightingaleSilenceWeb\
 └── backups/
 ```
 
-当前生产服务主要包括 AstrBot、NapCat、RSSHub、GsCore 和 NightingaleOpsBot runner。
+当前生产服务主要包括 AstrBot、NapCat、RSSHub 和 NightingaleOpsBot runner。二游相关的 GsCore/Sayu 功能已停用，不作为默认健康检查目标。
 
 ## AI 工作流程
 
@@ -68,7 +68,7 @@ H:\NightingaleSilenceWeb\
 - `docs/tencent-cloud-traffic-runbook.md`
 - `docs/ffxiv-watch-plan.md`
 - `docs/github-watch-plan.md`
-- `docs/x-feed-plugin-plan.md`
+- `docs/x-feed-twikit-runbook.md`
 - `docs/share-link-resolver-runbook.md`
 
 ## 安全边界

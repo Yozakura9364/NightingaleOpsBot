@@ -1,0 +1,110 @@
+{
+  "rsshub_base_url": {
+    "description": "RSSHub 基础地址",
+    "type": "string",
+    "default": "http://rsshub:1200",
+    "hint": "未绑定 B站 Cookie 时回退使用。"
+  },
+  "request_proxy_url": {
+    "description": "B站动态接口代理",
+    "type": "string",
+    "default": "",
+    "hint": "绑定 Cookie 后抓取 B站动态时使用，例如 http://100.74.24.101:7890。"
+  },
+  "request_timeout_seconds": {
+    "description": "B站动态接口超时秒数",
+    "type": "int",
+    "default": 30
+  },
+  "enabled": {
+    "description": "启用后台轮询推送",
+    "type": "bool",
+    "default": true
+  },
+  "poll_interval_minutes": {
+    "description": "轮询间隔分钟",
+    "type": "int",
+    "default": 10,
+    "hint": "插件会强制不低于 5 分钟。"
+  },
+  "max_items_per_poll": {
+    "description": "每个 UID 每次最多推送条数",
+    "type": "int",
+    "default": 3
+  },
+  "initial_backfill_items": {
+    "description": "新增订阅时立即展示的最新条数",
+    "type": "int",
+    "default": 1
+  },
+  "include_images": {
+    "description": "推送正文后单独发送图片",
+    "type": "bool",
+    "default": true,
+    "hint": "图片发送失败不影响文字推送。"
+  },
+  "render_card_image": {
+    "description": "浼樺厛鐢熸垚鍗曞紶鍔ㄦ€佸崱鐗囧浘",
+    "type": "bool",
+    "default": true,
+    "hint": "寮€鍚悗浼樺厛鍙戦€佸崱鐗囬暱鍥撅紝澶辫触鏃跺啀鍥為€€鍒版枃鏈垨鍘熷浘銆?"
+  },
+  "card_width": {
+    "description": "鍔ㄦ€佸崱鐗囧浘瀹藉害",
+    "type": "int",
+    "default": 860
+  },
+  "card_max_height": {
+    "description": "鍔ㄦ€佸崱鐗囧浘鏈€澶ч珮搴?",
+    "type": "int",
+    "default": 2800
+  },
+  "card_brand_name": {
+    "description": "鍔ㄦ€佸崱鐗囧簳閮ㄥ搧鐗屽悕绉?",
+    "type": "string",
+    "default": "Yoine❤"
+  },
+  "card_brand_avatar_url": {
+    "description": "鍔ㄦ€佸崱鐗囧簳閮ㄥ搧鐗屽ご鍍忓湴鍧€",
+    "type": "string",
+    "default": "https://q1.qlogo.cn/g?b=qq&nk=1756507015&s=640",
+    "hint": "榛樿浣跨敤 QQ 鏈嶅姟鍣ㄥ彿鐨勫叕寮€澶村儚锛屽彲鏀规垚浣犵殑鍥剧墖 URL。"
+  },
+  "max_images_per_post": {
+    "description": "每条动态最多发送图片数",
+    "type": "int",
+    "default": 1
+  },
+  "image_proxy_url": {
+    "description": "图片下载代理",
+    "type": "string",
+    "default": "",
+    "hint": "B站图片正常直连即可，只有容器网络受限时再配置。"
+  },
+  "image_download_timeout_seconds": {
+    "description": "图片下载超时秒数",
+    "type": "int",
+    "default": 20
+  },
+  "max_image_bytes": {
+    "description": "单张图片最大下载字节数",
+    "type": "int",
+    "default": 12000000
+  },
+  "admin_user_ids": {
+    "description": "允许管理订阅和登录态的 QQ 号",
+    "type": "string",
+    "default": "",
+    "hint": "逗号分隔。留空表示不限制。"
+  },
+  "failure_notice_threshold": {
+    "description": "连续失败多少次后在日志中升级为警告",
+    "type": "int",
+    "default": 6
+  },
+  "max_output_chars": {
+    "description": "单条消息最大输出长度",
+    "type": "int",
+    "default": 1800
+  }
+}

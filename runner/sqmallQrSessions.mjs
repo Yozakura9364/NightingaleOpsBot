@@ -14,6 +14,7 @@ const DEFAULT_LOGIN_URL =
   '&returnURL=https%3A%2F%2Fm.qu.sdo.com%2Fpersonal-center%3FmerchantId%3D1' +
   '&serviceUrl=https%3A%2F%2Fm.qu.sdo.com%2Fpersonal-center%3FmerchantId%3D1'
 const SQMALL_SERVICE_URL = 'https://m.qu.sdo.com/personal-center?merchantId=1'
+const SQMALL_WEB_URL = 'https://qu.sdo.com/'
 const SESSION_STATUS_URL = 'https://sqmallservice.u.sdo.com/api/us/getSessionStatus'
 const DEFAULT_TTL_MS = 180000
 const DEFAULT_NAVIGATION_TIMEOUT_MS = 45000
@@ -60,6 +61,17 @@ function parseJsonp(text) {
   } catch {
     return null
   }
+}
+
+function parseBrowserState(value) {
+  const payload = typeof value === 'string' ? JSON.parse(value) : value
+  if (!payload || typeof payload !== 'object') {
+    userError(400, 'invalid browser state payload')
+  }
+  if (!Array.isArray(payload.cookies) || !Array.isArray(payload.origins)) {
+    userError(400, 'invalid browser state payload')
+  }
+  return payload
 }
 
 function ticketFromCodeKeyPayload(payload) {
@@ -228,6 +240,53 @@ async function getRawSqmallLoginData(context) {
   return payload?.data && typeof payload.data === 'object' ? payload.data : {}
 }
 
+async function getDaoyuCredential(context) {
+  const cookies = await context.cookies(
+    'https://daoyu.sdo.com',
+    'https://login.sdo.com',
+    'https://login.u.sdo.com'
+  )
+  const byName = new Map(cookies.map((cookie) => [cookie.name, cookie.value]))
+  const daoyuKey = String(byName.get('USERSESSID') || '').trim()
+  const showUsername = String(byName.get('show_username') || '').trim()
+  if (!daoyuKey || !showUsername) {
+    return null
+  }
+  return {
+    kind: 'daoyu',
+    daoyuKey,
+    showUsername
+  }
+}
+
+async function extractSqmallSessionCredential(context, fallbackDisplayName = '') {
+  const cookies = await context.cookies(
+    'https://sqmallservice.u.sdo.com',
+    'https://m.qu.sdo.com',
+    'https://qu.sdo.com'
+  )
+  const sessionCookie = cookies.find((cookie) => cookie.name === 'sessionId')
+  const data = await getRawSqmallLoginData(context)
+  const memberId = String(data.direbmemllam || '').trim()
+  return {
+    sessionId: String(sessionCookie?.value || '').trim(),
+    memberId,
+    displayName: String(data.emankcin || data.nickName || data.showUsername || fallbackDisplayName || memberId).trim()
+  }
+}
+
+async function buildBrowserStateCredential(context, fallbackDisplayName = '') {
+  const storageState = await context.storageState()
+  const sessionCredential = await extractSqmallSessionCredential(context, fallbackDisplayName)
+  return {
+    kind: 'sqmall-browser-state',
+    browserState: JSON.stringify(storageState),
+    sessionId: sessionCredential.sessionId,
+    memberId: sessionCredential.memberId,
+    displayName: sessionCredential.displayName
+  }
+}
+
 async function establishMallSession(session) {
   if (!session?.loginTicket || session.mallSessionAttempted) {
     return false
@@ -246,6 +305,61 @@ async function establishMallSession(session) {
     session.mallSessionError = compactText(error instanceof Error ? error.message : String(error), 160)
     return false
   }
+}
+
+async function refreshMallSessionFromBrowserState(context, page) {
+  const initialState = await getSanitizedSqmallLoginState(context)
+  if (!initialState.loggedIn || !initialState.memberIdPresent) {
+    await page.goto(SQMALL_SERVICE_URL, {
+      waitUntil: 'domcontentloaded',
+      timeout: 30000
+    })
+    await page.waitForTimeout(1500)
+  }
+
+  let loginState = await getSanitizedSqmallLoginState(context)
+  let credential = await extractSqmallSessionCredential(context)
+  if ((!credential.sessionId || !credential.memberId) && loginState.loggedIn) {
+    await page.goto(SQMALL_WEB_URL, {
+      waitUntil: 'domcontentloaded',
+      timeout: 30000
+    })
+    await page.waitForTimeout(1200)
+    loginState = await getSanitizedSqmallLoginState(context)
+    credential = await extractSqmallSessionCredential(context)
+  }
+
+  return { loginState, credential }
+}
+
+async function launchSqmallBrowser(payload = {}) {
+  const { chromium } = await loadPlaywright()
+  const launchOptions = {
+    headless: !payload?.headed,
+    args: [
+      '--disable-blink-features=AutomationControlled',
+      '--disable-crash-reporter',
+      '--disable-crashpad'
+    ]
+  }
+  if (process.env.NS_OPS_PLAYWRIGHT_EXECUTABLE_PATH) {
+    launchOptions.executablePath = process.env.NS_OPS_PLAYWRIGHT_EXECUTABLE_PATH
+  } else if (process.env.NS_OPS_PLAYWRIGHT_CHANNEL) {
+    launchOptions.channel = process.env.NS_OPS_PLAYWRIGHT_CHANNEL
+  } else if (process.platform === 'win32') {
+    launchOptions.channel = 'chrome'
+  }
+
+  const browser = await chromium.launch(launchOptions)
+  const context = await browser.newContext({
+    locale: 'zh-CN',
+    timezoneId: 'Asia/Shanghai',
+    viewport: { width: 430, height: 900 },
+    userAgent: USER_AGENT,
+    storageState: payload.storageState
+  })
+  const page = await context.newPage()
+  return { browser, context, page }
 }
 
 async function clickIfPresent(pageOrFrame, locator, actionName) {
@@ -321,7 +435,9 @@ async function forceShowQrPanel(frame) {
       }
       const notice = document.querySelector('#code2 .code2d_notice')
       if (notice) {
-        notice.innerHTML = '<span style="color:#e60039;font-weight:bold;">Daoyu / WeChat</span> scan only<br><span style="color:#666;font-size:12px;">Do NOT use QQ scanner</span>'
+        notice.innerHTML =
+          '<span style="color:#e60039;font-weight:bold;">Daoyu / WeChat</span> scan only<br>' +
+          '<span style="color:#666;font-size:12px;">Do NOT use QQ scanner</span>'
         notice.style.display = 'block'
         notice.style.margin = '0 0 8px'
         notice.style.lineHeight = '1.5'
@@ -385,7 +501,6 @@ export async function startSqmallQrLoginSession(payload = {}) {
     userError(429, 'too many active sqmall qr sessions')
   }
 
-  const { chromium } = await loadPlaywright()
   const sessionId = randomUUID()
   const now = Date.now()
   const ttlMs = payloadNumber(payload, 'ttlMs', DEFAULT_TTL_MS, { min: 60000, max: 300000 })
@@ -394,30 +509,9 @@ export async function startSqmallQrLoginSession(payload = {}) {
 
   let browser = null
   try {
-    const launchOptions = {
-      headless: !payload?.headed,
-      args: [
-        '--disable-blink-features=AutomationControlled',
-        '--disable-crash-reporter',
-        '--disable-crashpad'
-      ]
-    }
-    if (process.env.NS_OPS_PLAYWRIGHT_EXECUTABLE_PATH) {
-      launchOptions.executablePath = process.env.NS_OPS_PLAYWRIGHT_EXECUTABLE_PATH
-    } else if (process.env.NS_OPS_PLAYWRIGHT_CHANNEL) {
-      launchOptions.channel = process.env.NS_OPS_PLAYWRIGHT_CHANNEL
-    } else if (process.platform === 'win32') {
-      launchOptions.channel = 'chrome'
-    }
-
-    browser = await chromium.launch(launchOptions)
-    const context = await browser.newContext({
-      locale: 'zh-CN',
-      timezoneId: 'Asia/Shanghai',
-      viewport: { width: 430, height: 900 },
-      userAgent: USER_AGENT
-    })
-    const page = await context.newPage()
+    const launched = await launchSqmallBrowser({ headed: payload?.headed })
+    browser = launched.browser
+    const { context, page } = launched
     const responses = []
     const pendingResponseReads = new Set()
     page.on('response', (response) => {
@@ -541,32 +635,74 @@ export async function getSqmallQrLoginStatus(sessionId) {
     }
   }
 
-  const cookies = await session.context.cookies('https://sqmallservice.u.sdo.com', 'https://m.qu.sdo.com')
-  const sessionCookie = cookies.find((cookie) => cookie.name === 'sessionId')
-  const data = await getRawSqmallLoginData(session.context)
-  const memberId = String(data.direbmemllam || '').trim()
-  if (!sessionCookie?.value || !memberId) {
+  const browserCredential = await buildBrowserStateCredential(session.context, loginState.displayName)
+  if (!browserCredential.sessionId || !browserCredential.memberId) {
     return {
       status: 'pending',
       loggedIn: false,
       expiresAt: new Date(session.expiresAtMs).toISOString(),
       loginState: {
         ...loginState,
-        resultMsg: '已登录，但尚未取得商城 sessionId 或会员标识'
+        resultMsg: 'logged in but missing mall session credential'
       }
     }
   }
 
+  const daoyuCredential = await getDaoyuCredential(session.context)
   await closeSession(session)
   return {
     status: 'success',
     loggedIn: true,
     loginState,
     credential: {
-      kind: 'sqmall-session',
-      sessionId: sessionCookie.value,
-      memberId,
-      displayName: String(data.emankcin || data.nickName || data.showUsername || memberId)
+      ...browserCredential,
+      daoyuCredential
+    }
+  }
+}
+
+export async function refreshSqmallBrowserCredential(payload = {}) {
+  const storageState = parseBrowserState(payload?.browserState)
+  let browser = null
+  try {
+    const launched = await launchSqmallBrowser({
+      storageState,
+      headed: payload?.headed
+    })
+    browser = launched.browser
+    const { context, page } = launched
+    const { loginState, credential } = await refreshMallSessionFromBrowserState(context, page)
+    if (!loginState.loggedIn) {
+      return {
+        status: 'expired',
+        loggedIn: false,
+        loginState,
+        credential: null
+      }
+    }
+    if (!credential.sessionId || !credential.memberId) {
+      return {
+        status: 'pending',
+        loggedIn: false,
+        loginState: {
+          ...loginState,
+          resultMsg: loginState.resultMsg || 'logged in but missing mall session credential'
+        },
+        credential: null
+      }
+    }
+
+    return {
+      status: 'success',
+      loggedIn: true,
+      loginState,
+      credential: await buildBrowserStateCredential(context, credential.displayName)
+    }
+  } finally {
+    try {
+      await browser?.close()
+    } catch {
+      // Ignore close failures during one-shot refresh.
     }
   }
 }

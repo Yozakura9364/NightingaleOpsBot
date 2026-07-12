@@ -128,6 +128,7 @@ class SqmallCredentialStore:
         private_origin: str,
         daoyu_key: str,
         show_username: str,
+        member_id: str = "",
         slot: str | None = DEFAULT_SLOT,
     ) -> None:
         normalized_slot = self.validate_slot(slot)
@@ -139,7 +140,7 @@ class SqmallCredentialStore:
                     user_id, slot, private_origin, daoyu_key_enc, show_username,
                     credential_kind, member_id, created_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, 'daoyu', '', ?, ?)
+                VALUES (?, ?, ?, ?, ?, 'daoyu', ?, ?, ?)
                 ON CONFLICT(user_id, slot) DO UPDATE SET
                     private_origin = excluded.private_origin,
                     daoyu_key_enc = excluded.daoyu_key_enc,
@@ -154,6 +155,7 @@ class SqmallCredentialStore:
                     private_origin,
                     self._encrypt(daoyu_key),
                     show_username,
+                    member_id,
                     now,
                     now,
                 ),
@@ -191,6 +193,45 @@ class SqmallCredentialStore:
                     normalized_slot,
                     private_origin,
                     self._encrypt(session_id),
+                    display_name,
+                    member_id,
+                    now,
+                    now,
+                ),
+            )
+
+    def bind_browser_state(
+        self,
+        user_id: str,
+        private_origin: str,
+        browser_state: str,
+        member_id: str,
+        display_name: str,
+        slot: str | None = DEFAULT_SLOT,
+    ) -> None:
+        normalized_slot = self.validate_slot(slot)
+        now = self._now()
+        with self._lock, self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO accounts (
+                    user_id, slot, private_origin, daoyu_key_enc, show_username,
+                    credential_kind, member_id, created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, 'sqmall-browser-state', ?, ?, ?)
+                ON CONFLICT(user_id, slot) DO UPDATE SET
+                    private_origin = excluded.private_origin,
+                    daoyu_key_enc = excluded.daoyu_key_enc,
+                    show_username = excluded.show_username,
+                    credential_kind = excluded.credential_kind,
+                    member_id = excluded.member_id,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    user_id,
+                    normalized_slot,
+                    private_origin,
+                    self._encrypt(browser_state),
                     display_name,
                     member_id,
                     now,

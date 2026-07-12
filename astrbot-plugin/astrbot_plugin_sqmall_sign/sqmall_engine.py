@@ -137,7 +137,24 @@ def _daoyu_headers() -> dict[str, str]:
     }
 
 
-def _mall_headers(*, merchant_id: str = "1", deploy_platform: str = "4") -> dict[str, str]:
+def _mall_headers(*, merchant_id: str = "1", deploy_platform: str = "4", mode: str = "app") -> dict[str, str]:
+    if mode == "web":
+        return {
+            "Accept": "application/json, text/javascript, */*; q=0.01",
+            "Cache-Control": "no-cache",
+            "Pragma": "no-cache",
+            "Origin": "https://qu.sdo.com",
+            "Referer": "https://qu.sdo.com/",
+            "User-Agent": (
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.5 Safari/605.1.15"
+            ),
+            "qu-deploy-platform": "1",
+            "qu-hardware-platform": "3",
+            "qu-merchant-id": merchant_id,
+            "qu-software-platform": "1",
+            "qu-web-host": "qu.sdo.com",
+        }
     return {
         "Accept": "application/json, text/javascript, */*; q=0.01",
         "Cache-Control": "no-cache",
@@ -154,15 +171,20 @@ def _mall_headers(*, merchant_id: str = "1", deploy_platform: str = "4") -> dict
     }
 
 
-def _daoyu_cookies(daoyu_key: str, show_username: str) -> dict[str, str]:
-    return {
+def _daoyu_cookies(daoyu_key: str, identity: str, user_id: str = "") -> dict[str, str]:
+    cookies = {
         "USERSESSID": daoyu_key,
         "is_login": "1",
-        "show_username": show_username,
     }
+    if user_id:
+        cookies["user_id"] = user_id
+        cookies["nickname"] = identity
+    else:
+        cookies["show_username"] = identity
+    return cookies
 
 
-def _get_flowid(manuid: str, device_id: str, daoyu_key: str, show_username: str) -> str:
+def _get_flowid(manuid: str, device_id: str, daoyu_key: str, identity: str, user_id: str = "") -> str:
     payload, _ = _json_request(
         "GET",
         f"{DAOYU_BASE_URL}/api/thirdPartyAuth/initialize",
@@ -181,7 +203,7 @@ def _get_flowid(manuid: str, device_id: str, daoyu_key: str, show_username: str)
             "device_id": device_id,
         },
         headers=_daoyu_headers(),
-        cookies=_daoyu_cookies(daoyu_key, show_username),
+        cookies=_daoyu_cookies(daoyu_key, identity, user_id),
     )
     if payload.get("return_code") != 0:
         raise SqmallSignError(f"获取叨鱼 flowId 失败：{payload.get('return_message', payload)}")
@@ -196,7 +218,8 @@ def _get_account_id_list(
     manuid: str,
     device_id: str,
     daoyu_key: str,
-    show_username: str,
+    identity: str,
+    user_id: str = "",
 ) -> list[dict]:
     payload, _ = _json_request(
         "GET",
@@ -213,7 +236,7 @@ def _get_account_id_list(
             "device_id": device_id,
         },
         headers=_daoyu_headers(),
-        cookies=_daoyu_cookies(daoyu_key, show_username),
+        cookies=_daoyu_cookies(daoyu_key, identity, user_id),
     )
     if payload.get("return_message") != "success":
         raise SqmallSignError(f"拉取子账号列表失败：{payload.get('return_message', payload)}")
@@ -227,7 +250,8 @@ def _make_confirm(
     manuid: str,
     device_id: str,
     daoyu_key: str,
-    show_username: str,
+    identity: str,
+    user_id: str = "",
 ) -> bool:
     payload, _ = _json_request(
         "GET",
@@ -245,7 +269,7 @@ def _make_confirm(
             "circle_id": "854742",
         },
         headers=_daoyu_headers(),
-        cookies=_daoyu_cookies(daoyu_key, show_username),
+        cookies=_daoyu_cookies(daoyu_key, identity, user_id),
     )
     return payload.get("return_message") == "success"
 
@@ -255,7 +279,8 @@ def _get_sub_account_key(
     manuid: str,
     device_id: str,
     daoyu_key: str,
-    show_username: str,
+    identity: str,
+    user_id: str = "",
 ) -> str:
     payload, _ = _json_request(
         "GET",
@@ -272,7 +297,7 @@ def _get_sub_account_key(
             "src_code": "8",
         },
         headers=_daoyu_headers(),
-        cookies=_daoyu_cookies(daoyu_key, show_username),
+        cookies=_daoyu_cookies(daoyu_key, identity, user_id),
     )
     if payload.get("return_code") != 0:
         raise SqmallSignError(f"获取子账号票据失败：{payload.get('return_message', payload)}")
@@ -314,7 +339,7 @@ def _sign_account(sub_session_id: str, account_id: str) -> tuple[bool, str]:
         "PUT",
         f"{SQMALL_BASE_URL}/api/us/integration/checkIn",
         data={"merchantId": 1},
-        headers=_mall_headers(),
+        headers=_mall_headers(mode="web"),
         cookies={"sessionId": sub_session_id, "direbmemllam": account_id},
     )
     result_msg = str(payload.get("resultMsg") or payload.get("message") or payload)
@@ -330,25 +355,28 @@ def _get_balance(sub_session_id: str) -> int | str:
         "GET",
         f"{SQMALL_BASE_URL}/api/rs/member/integral/balance",
         params={"merchantId": 1},
-        headers=_mall_headers(),
+        headers=_mall_headers(mode="web"),
         cookies={"sessionId": sub_session_id},
     )
     data = payload.get("data") or {}
     return data.get("balance", "-")
 
 
-def run_sqmall_sign(daoyu_key: str, show_username: str) -> SqmallSignResult:
+def run_sqmall_sign(daoyu_key: str, identity: str, user_id: str = "") -> SqmallSignResult:
     key = str(daoyu_key or "").strip()
-    username = str(show_username or "").strip()
+    name = str(identity or "").strip()
+    normalized_user_id = str(user_id or "").strip()
     if not key.startswith("DY"):
         raise SqmallSignError("DaoyuKey 格式不正确，应以 DY 开头。")
-    if len(username) < 5:
-        raise SqmallSignError("ShowUsername 格式不正确，请填写叨鱼显示用户名。")
+    if len(name) < 2:
+        raise SqmallSignError("身份字段过短，请填写 SHOW_USERNAME 或 NICKNAME。")
+    if normalized_user_id and not normalized_user_id.isdigit():
+        raise SqmallSignError("USER_ID 格式不正确，应为纯数字。")
 
     device_id = _random_device_id()
     manuid = _random_manuid()
-    flowid = _get_flowid(manuid, device_id, key, username)
-    accounts = _get_account_id_list(flowid, manuid, device_id, key, username)
+    flowid = _get_flowid(manuid, device_id, key, name, normalized_user_id)
+    accounts = _get_account_id_list(flowid, manuid, device_id, key, name, normalized_user_id)
     if not accounts:
         raise SqmallSignError("没有发现叨鱼子账号。")
 
@@ -361,10 +389,10 @@ def run_sqmall_sign(daoyu_key: str, show_username: str) -> SqmallSignResult:
         try:
             if not account_id:
                 raise SqmallSignError("子账号缺少 accountId")
-            if not _make_confirm(account_id, flowid, manuid, device_id, key, username):
+            if not _make_confirm(account_id, flowid, manuid, device_id, key, name, normalized_user_id):
                 raise SqmallSignError("与叨鱼服务器握手失败")
 
-            sub_account_key = _get_sub_account_key(flowid, manuid, device_id, key, username)
+            sub_account_key = _get_sub_account_key(flowid, manuid, device_id, key, name, normalized_user_id)
             sub_session_id = _get_sub_account_session(sub_account_key, temp_session_id)
             ok, message = _sign_account(sub_session_id, account_id)
             balance = _get_balance(sub_session_id)
@@ -386,9 +414,29 @@ def run_sqmall_sign(daoyu_key: str, show_username: str) -> SqmallSignResult:
             )
 
         if index + 1 < len(accounts):
-            flowid = _get_flowid(manuid, device_id, key, username)
+            flowid = _get_flowid(manuid, device_id, key, name, normalized_user_id)
 
     return SqmallSignResult(ok=any(item.ok for item in results), account_results=results)
+
+
+def validate_sqmall_daoyu_credentials(daoyu_key: str, identity: str, user_id: str = "") -> int:
+    key = str(daoyu_key or "").strip()
+    name = str(identity or "").strip()
+    normalized_user_id = str(user_id or "").strip()
+    if not key.startswith("DY"):
+        raise SqmallSignError("DaoyuKey 格式不正确，应以 DY 开头。")
+    if len(name) < 2:
+        raise SqmallSignError("身份字段过短，请填写 SHOW_USERNAME 或 NICKNAME。")
+    if normalized_user_id and not normalized_user_id.isdigit():
+        raise SqmallSignError("USER_ID 格式不正确，应为纯数字。")
+
+    device_id = _random_device_id()
+    manuid = _random_manuid()
+    flowid = _get_flowid(manuid, device_id, key, name, normalized_user_id)
+    accounts = _get_account_id_list(flowid, manuid, device_id, key, name, normalized_user_id)
+    if not accounts:
+        raise SqmallSignError("没有发现叨鱼子账号。")
+    return len(accounts)
 
 
 def run_sqmall_session_sign(session_id: str, member_id: str, display_name: str = "") -> SqmallSignResult:

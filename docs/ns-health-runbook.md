@@ -50,7 +50,7 @@ QQ 命令：
 默认 Docker 容器：
 
 ```text
-astrbot, napcat, gsuid_core, rsshub
+astrbot, napcat, rsshub
 ```
 
 默认 systemd 服务：
@@ -64,7 +64,6 @@ nightingale-ops-runner, nsglamour, nightingale-xproxy-relay, docker
 ```text
 AstrBot=http://127.0.0.1:6185/
 NapCat=http://127.0.0.1:6099/
-GsCore=http://127.0.0.1:8764/
 NSGlamour=http://127.0.0.1:8765/
 ```
 
@@ -119,9 +118,9 @@ NS_HEALTH_ERROR_LOG_ALERT=true
 可配置项：
 
 ```bash
-NS_HEALTH_DOCKER_CONTAINERS=astrbot,napcat,gsuid_core,rsshub
+NS_HEALTH_DOCKER_CONTAINERS=astrbot,napcat,rsshub
 NS_HEALTH_SYSTEMD_SERVICES=nightingale-ops-runner,nsglamour,nightingale-xproxy-relay,docker
-NS_HEALTH_HTTP_URLS=AstrBot=http://127.0.0.1:6185/,NapCat=http://127.0.0.1:6099/,GsCore=http://127.0.0.1:8764/,NSGlamour=http://127.0.0.1:8765/
+NS_HEALTH_HTTP_URLS=AstrBot=http://127.0.0.1:6185/,NapCat=http://127.0.0.1:6099/,NSGlamour=http://127.0.0.1:8765/
 NS_HEALTH_TLS_HOSTS=example.com,www.example.com
 NS_HEALTH_DISK_PATHS=/
 NS_HEALTH_DISK_WARN_PERCENT=85
