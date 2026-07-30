@@ -18,6 +18,8 @@ class DeadlineItem:
     created_by: str
     created_at: str
     enabled: bool
+    source_url: str
+    source_id: str
 
 
 @dataclass(frozen=True)
@@ -31,6 +33,7 @@ class ReminderTarget:
 
 class DeadlineStore:
     BROADCAST_ORIGIN = "__broadcast__"
+    HERMES_ORIGIN = "__hermes__"
 
     def __init__(self, data_dir: Path):
         self.data_dir = data_dir
@@ -81,6 +84,11 @@ class DeadlineStore:
                 "CREATE INDEX IF NOT EXISTS idx_deadlines_enabled_due ON deadlines(enabled, due_at)"
             )
             self._ensure_column(connection, "targets", "broadcast_enabled", "INTEGER NOT NULL DEFAULT 0")
+            self._ensure_column(connection, "deadlines", "source_url", "TEXT NOT NULL DEFAULT ''")
+            self._ensure_column(connection, "deadlines", "source_id", "TEXT NOT NULL DEFAULT ''")
+            connection.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_deadlines_source_id ON deadlines(source_id) WHERE source_id != ''"
+            )
 
     @staticmethod
     def _ensure_column(connection, table: str, column: str, definition: str) -> None:
@@ -109,6 +117,67 @@ class DeadlineStore:
                 (target_origin, target_kind, now, now),
             )
 
+    def sync_deadlines(self, events: list[dict]) -> int:
+        """全量替换 Hermes 同步的 deadlines。返回变更计数。"""
+        now = self._now()
+        changed = 0
+        with self._lock, self._connect() as connection:
+            incoming_ids = set()
+            for event in events:
+                event_id = str(event.get("id", "")).strip()
+                if not event_id:
+                    continue
+                incoming_ids.add(event_id)
+                title = str(event.get("title", "")).strip()
+                url = str(event.get("url", "")).strip()
+                starts = str(event.get("startsAt", "")).strip()
+                ends = str(event.get("endsAt", "")).strip()
+                region = str(event.get("region", "common")).strip()
+                category = {"cn": "国服活动", "common": "共同活动"}.get(region, "国际服活动")
+
+                # Use endsAt as due_at; if missing, use startsAt + 1 hour
+                due_at = ends if ends else starts
+
+                row = connection.execute(
+                    "SELECT id, title, due_at, category, source_url, enabled FROM deadlines WHERE source_id = ?",
+                    (event_id,),
+                ).fetchone()
+
+                if row:
+                    existing = dict(row)
+                    needs_update = (
+                        existing["title"] != title
+                        or existing["due_at"] != due_at
+                        or existing["category"] != category
+                        or existing["source_url"] != url
+                        or not existing["enabled"]
+                    )
+                    if needs_update:
+                        connection.execute(
+                            "UPDATE deadlines SET title=?, due_at=?, category=?, source_url=?, enabled=1 WHERE source_id=?",
+                            (title, due_at, category, url, event_id),
+                        )
+                        changed += 1
+                else:
+                    connection.execute(
+                        """INSERT INTO deadlines (target_origin, target_kind, category, title, due_at, created_by, created_at, enabled, source_url, source_id)
+                           VALUES (?, 'broadcast', ?, ?, ?, 'hermes', ?, 1, ?, ?)""",
+                        (self.HERMES_ORIGIN, category, title, due_at, now, url, event_id),
+                    )
+                    changed += 1
+
+            # Delete events no longer in Hermes
+            if incoming_ids:
+                placeholders = ",".join("?" * len(incoming_ids))
+                connection.execute(
+                    f"DELETE FROM deadlines WHERE source_id != '' AND source_id NOT IN ({placeholders})",
+                    list(incoming_ids),
+                )
+            else:
+                connection.execute("DELETE FROM deadlines WHERE source_id != ''")
+
+        return changed
+
     def add_deadline(
         self,
         *,
@@ -118,6 +187,7 @@ class DeadlineStore:
         title: str,
         due_at: str,
         created_by: str,
+        source_url: str = "",
     ) -> DeadlineItem:
         now = self._now()
         with self._lock, self._connect() as connection:
@@ -126,11 +196,11 @@ class DeadlineStore:
             cursor = connection.execute(
                 """
                 INSERT INTO deadlines (
-                    target_origin, target_kind, category, title, due_at, created_by, created_at, enabled
+                    target_origin, target_kind, category, title, due_at, created_by, created_at, enabled, source_url
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, 1)
+                VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)
                 """,
-                (target_origin, target_kind, category, title, due_at, created_by, now),
+                (target_origin, target_kind, category, title, due_at, created_by, now, source_url),
             )
             row = connection.execute(
                 "SELECT * FROM deadlines WHERE id = ?",
@@ -139,8 +209,8 @@ class DeadlineStore:
         return self._row_to_deadline(row)
 
     def list_deadlines(self, *, target_origin: str, include_disabled: bool = False) -> list[DeadlineItem]:
-        where = "target_origin = ?"
-        params: list[object] = [target_origin]
+        where = "target_origin IN (?, ?)"
+        params: list[object] = [target_origin, self.HERMES_ORIGIN]
         if not include_disabled:
             where += " AND enabled = 1"
         with self._lock, self._connect() as connection:
@@ -159,19 +229,20 @@ class DeadlineStore:
             rows = connection.execute(
                 """
                 SELECT * FROM deadlines
-                WHERE target_origin = ?
+                WHERE (target_origin = ? OR target_origin = ?)
                   AND enabled = 1
                   AND due_at >= ?
                 ORDER BY due_at ASC, id ASC
                 """,
-                (target_origin, now_iso),
+                (target_origin, self.HERMES_ORIGIN, now_iso),
             ).fetchall()
         return [self._row_to_deadline(row) for row in rows]
 
     def delete_deadline(self, *, target_origin: str, deadline_id: int) -> bool:
         with self._lock, self._connect() as connection:
+            # Only allow deleting manual entries (source_id empty)
             cursor = connection.execute(
-                "DELETE FROM deadlines WHERE target_origin = ? AND id = ?",
+                "DELETE FROM deadlines WHERE target_origin = ? AND id = ? AND (source_id = '' OR source_id IS NULL)",
                 (target_origin, deadline_id),
             )
             return cursor.rowcount > 0
@@ -220,6 +291,10 @@ class DeadlineStore:
                   ON bd.target_origin = ?
                  AND bd.enabled = 1
                  AND bd.due_at >= ?
+                LEFT JOIN deadlines hd
+                  ON hd.target_origin = ?
+                 AND hd.enabled = 1
+                 AND hd.due_at >= ?
                 WHERE t.enabled = 1
                   AND t.target_origin <> ?
                   AND t.target_kind <> 'broadcast'
@@ -230,10 +305,15 @@ class DeadlineStore:
                       AND t.broadcast_enabled = 1
                       AND bd.id IS NOT NULL
                     )
+                    OR (
+                      t.target_kind = 'group'
+                      AND t.broadcast_enabled = 1
+                      AND hd.id IS NOT NULL
+                    )
                   )
                 ORDER BY t.target_origin ASC
                 """,
-                (now_iso, self.BROADCAST_ORIGIN, now_iso, self.BROADCAST_ORIGIN),
+                (now_iso, self.BROADCAST_ORIGIN, now_iso, self.HERMES_ORIGIN, now_iso, self.BROADCAST_ORIGIN),
             ).fetchall()
         return [self._row_to_target(row) for row in rows]
 
@@ -303,6 +383,8 @@ class DeadlineStore:
             created_by=str(row["created_by"]),
             created_at=str(row["created_at"]),
             enabled=bool(row["enabled"]),
+            source_url=str(row["source_url"] or ""),
+            source_id=str(row["source_id"] or ""),
         )
 
     @staticmethod
