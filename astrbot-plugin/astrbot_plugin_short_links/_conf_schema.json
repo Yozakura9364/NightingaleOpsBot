@@ -1,0 +1,31 @@
+{
+  "service_endpoint": {
+    "description": "短链服务内部地址",
+    "type": "string",
+    "default": "http://host.docker.internal:18768",
+    "hint": "仅填写服务器内部地址，不要改成公网管理接口。"
+  },
+  "api_token": {
+    "description": "短链服务 API Token",
+    "type": "string",
+    "default": "",
+    "hint": "必须与短链服务 systemd credential 一致，不要在聊天中发送。",
+    "obvious_hint": true
+  },
+  "owner_user_ids": {
+    "description": "允许管理短链的 QQ 号",
+    "type": "string",
+    "default": "",
+    "hint": "逗号分隔。留空时拒绝所有管理命令；建议只填写站点所有者 QQ 号。"
+  },
+  "timeout_seconds": {
+    "description": "内部 API 超时秒数",
+    "type": "int",
+    "default": 12
+  },
+  "max_output_chars": {
+    "description": "列表消息最大长度",
+    "type": "int",
+    "default": 3000
+  }
+}

@@ -1,0 +1,5 @@
+name: astrbot_plugin_short_links
+desc: 仅限所有者私聊使用的 Nightingale Silence 短链管理插件。
+version: 0.1.0
+author: NightingaleSilence
+repo: https://github.com/Yozakura9364/NightingaleOpsBot
