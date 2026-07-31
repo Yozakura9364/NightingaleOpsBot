@@ -25,6 +25,17 @@ class FeedItem:
     avatar_url: str = ""
 
 
+@dataclass(frozen=True)
+class LiveRoomStatus:
+    uid: str
+    room_id: str
+    is_live: bool
+    title: str
+    link: str
+    cover_url: str = ""
+    live_started_at: str = ""
+
+
 _TAG_RE = re.compile(r"<[^>]+>")
 _SPACE_RE = re.compile(r"\s+")
 _IMG_SRC_RE = re.compile(r"""<img\b[^>]*\bsrc=["']([^"']+)["']""", re.I)
@@ -201,6 +212,70 @@ def fetch_cookie_user_feed(
         if parsed is not None:
             parsed_items.append(parsed)
     return parsed_items
+
+
+def fetch_live_room_status(
+    uid: str,
+    *,
+    timeout: float = 15.0,
+    proxy_url: str = "",
+) -> LiveRoomStatus:
+    normalized_uid = normalize_uid(uid)
+    url = f"https://api.live.bilibili.com/room/v1/Room/getRoomInfoOld?mid={quote(normalized_uid)}"
+    headers = {
+        "Accept": "application/json, text/plain, */*",
+        "Referer": f"https://space.bilibili.com/{normalized_uid}",
+        "User-Agent": _DEFAULT_API_USER_AGENT,
+    }
+    handlers = []
+    if proxy_url:
+        handlers.append(ProxyHandler({"http": proxy_url, "https": proxy_url}))
+    request = Request(url, headers=headers)
+    try:
+        with build_opener(*handlers).open(request, timeout=timeout) as response:
+            status = getattr(response, "status", 200)
+            body = response.read(500_000)
+            content_type = response.headers.get("Content-Type", "")
+    except HTTPError as error:
+        body = error.read(40_000).decode("utf-8", errors="replace")
+        raise RuntimeError(_http_error_message(error.code, body)) from error
+    except URLError as error:
+        raise RuntimeError(f"连接 B 站直播接口失败：{error.reason}") from error
+
+    if status >= 400:
+        raise RuntimeError(f"B 站直播接口返回 HTTP {status}")
+    text = body.decode(_detect_charset(content_type) or "utf-8", errors="replace").strip()
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError as error:
+        raise RuntimeError(f"B 站直播接口返回的不是有效 JSON：{error}") from error
+    return _parse_live_room_status(normalized_uid, payload)
+
+
+def _parse_live_room_status(uid: str, payload: dict[str, Any]) -> LiveRoomStatus:
+    code = int(payload.get("code", -1))
+    if code != 0:
+        message = str(payload.get("message") or payload.get("msg") or f"code={code}").strip()
+        raise RuntimeError(f"B 站直播接口返回错误：{message} (code={code})")
+    data = payload.get("data") or {}
+    if not isinstance(data, dict):
+        raise RuntimeError("B 站直播接口缺少有效数据。")
+
+    room_id = str(data.get("roomid") or data.get("room_id") or "").strip()
+    link = str(data.get("url") or "").strip()
+    if link.startswith("//"):
+        link = "https:" + link
+    if not link and room_id:
+        link = f"https://live.bilibili.com/{room_id}"
+    return LiveRoomStatus(
+        uid=normalize_uid(uid),
+        room_id=room_id,
+        is_live=int(data.get("liveStatus") or data.get("live_status") or 0) == 1,
+        title=_clean_text(data.get("title") or ""),
+        link=link,
+        cover_url=_normalize_image_url(str(data.get("cover") or "").strip()),
+        live_started_at=_clean_text(data.get("liveTime") or data.get("live_time") or ""),
+    )
 
 
 def fetch_cookie_dynamic_detail(

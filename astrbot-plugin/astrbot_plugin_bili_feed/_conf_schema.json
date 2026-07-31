@@ -21,6 +21,18 @@
     "type": "bool",
     "default": true
   },
+  "live_watch_enabled": {
+    "description": "启用低延迟直播通知",
+    "type": "bool",
+    "default": true,
+    "hint": "使用公开直播状态接口，不消耗已绑定的 B站 Cookie。"
+  },
+  "live_poll_interval_seconds": {
+    "description": "直播状态轮询间隔秒数",
+    "type": "int",
+    "default": 30,
+    "hint": "最低 15 秒；普通动态仍按分钟间隔轮询。"
+  },
   "poll_interval_minutes": {
     "description": "轮询间隔分钟",
     "type": "int",
@@ -44,36 +56,53 @@
     "hint": "图片发送失败不影响文字推送。"
   },
   "render_card_image": {
-    "description": "浼樺厛鐢熸垚鍗曞紶鍔ㄦ€佸崱鐗囧浘",
+    "description": "优先生成单张动态卡片图",
     "type": "bool",
     "default": true,
-    "hint": "寮€鍚悗浼樺厛鍙戦€佸崱鐗囬暱鍥撅紝澶辫触鏃跺啀鍥為€€鍒版枃鏈垨鍘熷浘銆?"
+    "hint": "开启后发送动态卡片，并继续附带原图；渲染失败时回退到文本和原图。"
   },
   "card_width": {
-    "description": "鍔ㄦ€佸崱鐗囧浘瀹藉害",
+    "description": "动态卡片图宽度",
     "type": "int",
     "default": 860
   },
   "card_max_height": {
-    "description": "鍔ㄦ€佸崱鐗囧浘鏈€澶ч珮搴?",
+    "description": "动态卡片图最大高度",
     "type": "int",
     "default": 2800
   },
   "card_brand_name": {
-    "description": "鍔ㄦ€佸崱鐗囧簳閮ㄥ搧鐗屽悕绉?",
+    "description": "动态卡片底部品牌名称",
     "type": "string",
     "default": "Yoine❤"
   },
   "card_brand_avatar_url": {
-    "description": "鍔ㄦ€佸崱鐗囧簳閮ㄥ搧鐗屽ご鍍忓湴鍧€",
+    "description": "动态卡片底部品牌头像地址",
     "type": "string",
     "default": "https://q1.qlogo.cn/g?b=qq&nk=1756507015&s=640",
-    "hint": "榛樿浣跨敤 QQ 鏈嶅姟鍣ㄥ彿鐨勫叕寮€澶村儚锛屽彲鏀规垚浣犵殑鍥剧墖 URL。"
+    "hint": "默认使用 QQ 机器人头像，可改成其他公开图片 URL。"
+  },
+  "group_use_forward": {
+    "description": "群聊使用合并转发",
+    "type": "bool",
+    "default": true,
+    "hint": "开启后，群聊中的订阅推送和测试命令会把卡片、原链接和原图合并发送。"
+  },
+  "forward_display_name": {
+    "description": "合并转发显示名",
+    "type": "string",
+    "default": "Yoine♡"
+  },
+  "forward_display_uin": {
+    "description": "合并转发显示 QQ 号",
+    "type": "string",
+    "default": "1756507015",
+    "hint": "默认使用当前机器人 QQ；NapCat 账号变化时需要同步修改。"
   },
   "max_images_per_post": {
     "description": "每条动态最多发送图片数",
     "type": "int",
-    "default": 1
+    "default": 9
   },
   "image_proxy_url": {
     "description": "图片下载代理",

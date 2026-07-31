@@ -49,7 +49,9 @@ def _trim_canvas(path: Path) -> None:
     with Image.open(path) as source:
         image = source.convert("RGB")
         background = Image.new("RGB", image.size, image.getpixel((0, 0)))
-        bbox = ImageChops.difference(image, background).getbbox()
+        difference = ImageChops.difference(image, background).convert("L")
+        difference = difference.point(lambda value: 255 if value > 8 else 0)
+        bbox = difference.getbbox()
         if not bbox:
             return
         left = max(0, bbox[0] - 8)
@@ -72,8 +74,10 @@ async def render_bili_card_html(
     width: int = 860,
     max_height: int = 2800,
 ) -> str:
+    card_width = max(640, int(width))
     context = {
-        "card_width": max(640, int(width)),
+        "card_width": card_width,
+        "card_content_width": max(592, card_width - 48),
         "card_max_height": max(1200, int(max_height)),
         "author_name": str(item.author_name or "B站用户"),
         "author_avatar": _data_uri(avatar_path),
@@ -104,7 +108,7 @@ async def render_bili_card_html(
     signature = hashlib.sha256(
         "|".join(
             [
-                "html-card-sourcehan-v4",
+                "html-card-sourcehan-v6-fixed-pixel-width",
                 str(item.item_id),
                 str(item.title),
                 str(item.summary),

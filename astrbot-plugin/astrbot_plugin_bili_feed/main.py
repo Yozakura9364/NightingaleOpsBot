@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime
 from hashlib import sha256
+import os
 from pathlib import Path
 import re
 from urllib.error import URLError
@@ -16,9 +18,11 @@ from astrbot.api.star import Context, Star, register
 from .card_renderer import render_bili_card
 from .feed_client import (
     FeedItem,
+    LiveRoomStatus,
     extract_cookie_value,
     fetch_cookie_dynamic_detail,
     fetch_cookie_user_feed,
+    fetch_live_room_status,
     fetch_user_feed,
     normalize_cookie,
     normalize_uid,
@@ -74,6 +78,11 @@ def _event_group_id(event: AstrMessageEvent) -> str:
 
 def _event_origin(event: AstrMessageEvent) -> str:
     return str(getattr(event, "unified_msg_origin", "") or "")
+
+
+def _origin_is_group(origin: str) -> bool:
+    value = str(origin or "").lower()
+    return value.startswith("group:") or ":groupmessage:" in value
 
 
 def _target_kind(event: AstrMessageEvent) -> str:
@@ -268,17 +277,28 @@ class BiliFeedPlugin(Star):
         self.max_output_chars = int(self.config.get("max_output_chars", 1800) or 1800)
         self._poll_task: asyncio.Task | None = None
         self._poll_lock = asyncio.Lock()
+        self._live_poll_task: asyncio.Task | None = None
+        self._live_poll_lock = asyncio.Lock()
 
     async def initialize(self) -> None:
         if self.config.get("enabled", True):
             self._poll_task = asyncio.create_task(self._poll_loop())
             logger.info("Bili feed poll loop started.")
+            if self._live_watch_enabled():
+                self._live_poll_task = asyncio.create_task(self._live_poll_loop())
+                logger.info("Bili live poll loop started.")
 
     async def terminate(self) -> None:
         if self._poll_task:
             self._poll_task.cancel()
             try:
                 await self._poll_task
+            except asyncio.CancelledError:
+                pass
+        if self._live_poll_task:
+            self._live_poll_task.cancel()
+            try:
+                await self._live_poll_task
             except asyncio.CancelledError:
                 pass
 
@@ -295,6 +315,12 @@ class BiliFeedPlugin(Star):
         minutes = int(self.config.get("poll_interval_minutes", 10) or 10)
         return max(5, minutes) * 60
 
+    def _live_watch_enabled(self) -> bool:
+        return bool(self.config.get("live_watch_enabled", True))
+
+    def _live_poll_interval_seconds(self) -> int:
+        return max(15, int(self.config.get("live_poll_interval_seconds", 30) or 30))
+
     def _max_items_per_poll(self) -> int:
         return max(1, int(self.config.get("max_items_per_poll", 3) or 3))
 
@@ -305,7 +331,7 @@ class BiliFeedPlugin(Star):
         return bool(self.config.get("include_images", True))
 
     def _max_images_per_post(self) -> int:
-        return max(0, int(self.config.get("max_images_per_post", 1) or 0))
+        return max(0, int(self.config.get("max_images_per_post", 3) or 0))
 
     def _image_proxy_url(self) -> str:
         return str(self.config.get("image_proxy_url", "") or "").strip()
@@ -339,6 +365,15 @@ class BiliFeedPlugin(Star):
             )
             or ""
         ).strip()
+
+    def _group_use_forward(self) -> bool:
+        return bool(self.config.get("group_use_forward", True))
+
+    def _forward_display_name(self) -> str:
+        return str(self.config.get("forward_display_name", "Yoine♡") or "Yoine♡").strip()
+
+    def _forward_display_uin(self) -> str:
+        return str(self.config.get("forward_display_uin", "1756507015") or "1756507015").strip()
 
     def _is_admin(self, event: AstrMessageEvent) -> bool:
         admin_ids = _split_ids(self.config.get("admin_user_ids", ""))
@@ -469,13 +504,201 @@ class BiliFeedPlugin(Star):
         if not origin:
             return
         card_path = await self._render_item_card_path(item)
+        if _origin_is_group(origin) and self._group_use_forward():
+            nodes = await self._build_forward_nodes(uid, item, card_path=card_path)
+            if nodes:
+                origin_ref = origin
+
+                async def _send(chain):
+                    await self.context.send_message(origin_ref, chain)
+
+                await self._send_forward_batches(nodes, _send, link=item.link)
+                return
         if card_path:
             await self.context.send_message(origin, MessageChain([Comp.Image.fromFileSystem(card_path)]))
             if item.link:
                 await self.context.send_message(origin, MessageChain([Comp.Plain(item.link)]))
+            await self._send_item_images_to_origin(origin, item)
             return
         chain = await self._build_item_chain(self._format_item(uid, item), item, "Bili feed push")
         await self.context.send_message(origin, chain)
+
+    # ── Forward node batching ──────────────────────────────────────────
+    # ponytail: 40 MB conservative budget. NapCat ws limit ~50 MB.
+    # Base64 adds ~33 %; JSON structure / escaping / ws framing eat the rest.
+    _MAX_FORWARD_BATCH_BYTES: int = 40 * 1024 * 1024
+
+    @staticmethod
+    def _file_base64_estimate(path: str) -> int:
+        """Estimate Base64 serialised size for a local image file."""
+        try:
+            raw = os.path.getsize(path)
+        except OSError:
+            return 0
+        # Base64: ceil(raw / 3) * 4
+        return (raw + 2) // 3 * 4
+
+    @staticmethod
+    def _plain_estimate(text: str) -> int:
+        """Rough byte size of a Comp.Plain payload (UTF-8 text + framing)."""
+        return len(text.encode("utf-8", errors="replace")) + 32
+
+    @staticmethod
+    def _node_overhead() -> int:
+        """Per-node JSON overhead: name, uin, content array wrapping."""
+        return 512
+
+    @classmethod
+    def _batch_nodes(cls, display_name: str, display_uin: str,
+                     header: list[Comp.BaseMessageComponent],
+                     image_paths: list[str]) -> list[Comp.Node]:
+        """Split header + images into one or more Comp.Node batches."""
+        if not header and not image_paths:
+            return []
+
+        budget = cls._MAX_FORWARD_BATCH_BYTES
+
+        # Estimate header once — it goes in the first batch only.
+        header_bytes = cls._node_overhead()
+        for c in header:
+            if hasattr(c, "text"):
+                header_bytes += cls._plain_estimate(c.text)
+            # card image in header — Comp.Image with file
+            elif hasattr(c, "file"):
+                header_bytes += cls._file_base64_estimate(c.file)
+
+        nodes: list[Comp.Node] = []
+        current_content: list[Comp.BaseMessageComponent] = list(header)
+        current_bytes = header_bytes
+
+        for path in image_paths:
+            img_bytes = cls._file_base64_estimate(path)
+            if img_bytes <= 0:
+                img_bytes = 1  # never drop an image because of stat failure
+
+            if current_content and current_bytes + img_bytes > budget:
+                nodes.append(Comp.Node(
+                    content=current_content,
+                    name=display_name, uin=display_uin,
+                ))
+                current_content = []
+                current_bytes = cls._node_overhead()
+
+            current_content.append(Comp.Image.fromFileSystem(path))
+            current_bytes += img_bytes
+
+        if current_content:
+            nodes.append(Comp.Node(
+                content=current_content,
+                name=display_name, uin=display_uin,
+            ))
+
+        return nodes
+
+    @classmethod
+    async def _send_forward_batches(
+        cls,
+        nodes: list[Comp.Node],
+        send_fn,  # async callable(MessageChain) -> None
+        *,
+        link: str = "",
+    ) -> None:
+        """Send forward nodes; on batch failure, fallback to per-component send.
+
+        Already-succeeded batches are not repeated.  Subsequent batches
+        continue even after a failure.
+        """
+        for node in nodes:
+            try:
+                await send_fn(MessageChain([Comp.Nodes([node])]))
+            except Exception as error:
+                logger.warning(
+                    "Bili forward batch send failed for %s (node %d items): %s",
+                    link, len(node.content or []), error,
+                )
+                # Per-component fallback keeps content visible when the
+                # merged forward message exceeds the ws limit.
+                for component in (node.content or []):
+                    try:
+                        if hasattr(component, "file"):
+                            await send_fn(
+                                MessageChain([Comp.Image.fromFileSystem(component.file)])
+                            )
+                        elif hasattr(component, "text"):
+                            await send_fn(
+                                MessageChain([Comp.Plain(component.text)])
+                            )
+                    except Exception as comp_error:
+                        logger.warning(
+                            "Bili forward component fallback failed for %s: %s",
+                            link, comp_error,
+                        )
+
+    async def _build_forward_nodes(
+        self, uid: str, item: FeedItem, *, card_path: str = "",
+    ) -> list[Comp.Node]:
+        """Build one or more forward nodes, splitting when payload exceeds budget.
+
+        Returns the same single-node result as ``_build_forward_node`` when
+        everything fits; otherwise splits images across multiple nodes while
+        keeping the header (card + link, or text) in the first batch.
+        """
+        header: list[Comp.BaseMessageComponent] = []
+        if card_path:
+            header.append(Comp.Image.fromFileSystem(card_path))
+            if item.link:
+                header.append(Comp.Plain(item.link))
+        else:
+            header.append(Comp.Plain(self._format_item(uid, item)))
+
+        image_paths: list[str] = []
+        if self._include_images():
+            for url in item.image_urls[: self._max_images_per_post()]:
+                try:
+                    image_paths.append(await self._download_image(url))
+                except Exception as error:
+                    logger.warning(
+                        "Bili feed forward image build failed for %s: %s",
+                        item.link, error,
+                    )
+
+        if not header and not image_paths:
+            return []
+
+        return self._batch_nodes(
+            self._forward_display_name(),
+            self._forward_display_uin(),
+            header, image_paths,
+        )
+
+    async def _build_forward_node(
+        self,
+        uid: str,
+        item: FeedItem,
+        *,
+        card_path: str = "",
+    ) -> Comp.Node | None:
+        content: list[Comp.BaseMessageComponent] = []
+        if card_path:
+            content.append(Comp.Image.fromFileSystem(card_path))
+            if item.link:
+                content.append(Comp.Plain(item.link))
+        else:
+            content.append(Comp.Plain(self._format_item(uid, item)))
+        if self._include_images():
+            for image_url in item.image_urls[: self._max_images_per_post()]:
+                try:
+                    image_path = await self._download_image(image_url)
+                    content.append(Comp.Image.fromFileSystem(image_path))
+                except Exception as error:
+                    logger.warning("Bili feed forward image build failed for %s: %s", item.link, error)
+        if not content:
+            return None
+        return Comp.Node(
+            content=content,
+            name=self._forward_display_name(),
+            uin=self._forward_display_uin(),
+        )
 
     async def _send_item_images_to_origin(self, origin: str, item: FeedItem) -> None:
         if not origin or not self._include_images():
@@ -489,12 +712,24 @@ class BiliFeedPlugin(Star):
 
     async def _send_item_to_event(self, event: AstrMessageEvent, uid: str, item: FeedItem, prefix: str = "") -> None:
         card_path = await self._render_item_card_path(item)
+        if _event_group_id(event) and self._group_use_forward():
+            nodes = await self._build_forward_nodes(uid, item, card_path=card_path)
+            if nodes:
+                if prefix:
+                    await event.send(MessageChain([Comp.Plain(_clamp(prefix, self.max_output_chars))]))
+
+                async def _send(chain):
+                    await event.send(chain)
+
+                await self._send_forward_batches(nodes, _send, link=item.link)
+                return
         if card_path:
             if prefix:
                 await event.send(MessageChain([Comp.Plain(_clamp(prefix, self.max_output_chars))]))
             await event.send(MessageChain([Comp.Image.fromFileSystem(card_path)]))
             if item.link:
                 await event.send(MessageChain([Comp.Plain(item.link)]))
+            await self._send_item_images_to_event(event, item)
             return
         text = (prefix + "\n" if prefix else "") + self._format_item(uid, item)
         chain = await self._build_item_chain(text, item, "Bili feed command")
@@ -570,6 +805,105 @@ class BiliFeedPlugin(Star):
                 logger.error("Bili feed poll loop error: %s", error)
             await asyncio.sleep(self._poll_interval_seconds())
 
+    async def _live_poll_loop(self) -> None:
+        await asyncio.sleep(5)
+        while True:
+            try:
+                await self._poll_live_once()
+            except asyncio.CancelledError:
+                raise
+            except Exception as error:
+                logger.error("Bili live poll loop error: %s", error)
+            await asyncio.sleep(self._live_poll_interval_seconds())
+
+    async def _poll_live_once(self) -> None:
+        async with self._live_poll_lock:
+            subscriptions_by_uid: dict[str, list[Subscription]] = {}
+            for subscription in self.store.list_enabled():
+                subscriptions_by_uid.setdefault(subscription.uid, []).append(subscription)
+            for uid, subscriptions in subscriptions_by_uid.items():
+                await self._process_live_uid(uid, subscriptions)
+
+    async def _process_live_uid(self, uid: str, subscriptions: list[Subscription]) -> None:
+        previous = self.store.get_live_state(uid)
+        try:
+            status = await asyncio.to_thread(
+                fetch_live_room_status,
+                uid,
+                timeout=float(self._request_timeout_seconds()),
+            )
+        except Exception as error:
+            failure_count = self.store.record_live_failure(uid=uid, error=str(error))
+            if failure_count >= self._failure_notice_threshold():
+                logger.warning("Bili live status failed for %s for %s times: %s", uid, failure_count, error)
+            else:
+                logger.info("Bili live status failed for %s: %s", uid, error)
+            return
+
+        if previous is None:
+            self._record_live_status(status, event_key="")
+            return
+
+        started_at_changed = bool(
+            status.live_started_at
+            and status.live_started_at != previous.live_started_at
+        )
+        is_new_session = status.is_live and (not previous.is_live or started_at_changed)
+        event_key = previous.event_key if status.is_live else ""
+        if is_new_session:
+            session_id = status.live_started_at or datetime.now().astimezone().isoformat(timespec="seconds")
+            event_key = f"bili-live:{uid}:{status.room_id}:{session_id}"
+
+        self._record_live_status(status, event_key=event_key)
+        if not status.is_live or not event_key:
+            return
+
+        item = self._live_status_item(status, event_key)
+        for subscription in subscriptions:
+            if not _matches_filter(item, subscription.keyword_filter):
+                continue
+            seen_scope = self._seen_scope(subscription)
+            if self.store.has_seen(uid=seen_scope, item_id=event_key, link=item.link):
+                continue
+            try:
+                await self._send_item_to_origin(subscription.target_origin, uid, item)
+            except Exception as error:
+                logger.warning("Bili live notification failed for %s: %s", uid, error)
+                continue
+            self.store.record_seen(
+                uid=seen_scope,
+                item_id=event_key,
+                link=item.link,
+                published_at=item.published_at,
+            )
+
+    def _record_live_status(self, status: LiveRoomStatus, *, event_key: str) -> None:
+        self.store.record_live_success(
+            uid=status.uid,
+            room_id=status.room_id,
+            is_live=status.is_live,
+            live_started_at=status.live_started_at,
+            event_key=event_key,
+            title=status.title,
+        )
+
+    @staticmethod
+    def _live_status_item(status: LiveRoomStatus, event_key: str) -> FeedItem:
+        published_at = status.live_started_at or datetime.now().astimezone().isoformat(timespec="seconds")
+        return FeedItem(
+            item_id=event_key,
+            title=status.title or "正在直播",
+            link=status.link,
+            published_at=published_at,
+            summary="正在直播",
+            author_name=f"UID {status.uid}",
+            image_urls=[status.cover_url] if status.cover_url else [],
+        )
+
+    @staticmethod
+    def _is_live_item(item: FeedItem) -> bool:
+        return str(item.link or "").startswith("https://live.bilibili.com/")
+
     async def _poll_once(self) -> None:
         async with self._poll_lock:
             subscriptions = self.store.list_enabled()
@@ -608,9 +942,17 @@ class BiliFeedPlugin(Star):
         matched_items = [item for item in new_items if _matches_filter(item, subscription.keyword_filter)]
         for item in reversed(matched_items[: self._max_items_per_poll()]):
             item = await self._enrich_item_for_display(item)
+            if self._live_watch_enabled() and self._is_live_item(item):
+                self.store.record_seen(
+                    uid=self._seen_scope(subscription),
+                    item_id=item.item_id,
+                    link=item.link,
+                    published_at=item.published_at,
+                )
+                continue
             await self._send_item_to_origin(subscription.target_origin, subscription.uid, item)
             self.store.record_seen(
-                uid=subscription.uid,
+                uid=self._seen_scope(subscription),
                 item_id=item.item_id,
                 link=item.link,
                 published_at=item.published_at,
@@ -622,18 +964,50 @@ class BiliFeedPlugin(Star):
             last_seen_link=items[0].link,
         )
 
-    @staticmethod
-    def _new_items(subscription: Subscription, items: list[FeedItem]) -> list[FeedItem]:
+    def _new_items(self, subscription: Subscription, items: list[FeedItem]) -> list[FeedItem]:
         if not subscription.last_seen_id and not subscription.last_seen_link:
             return []
         result: list[FeedItem] = []
+        found_watermark = False
         for item in items:
             if item.item_id == subscription.last_seen_id or (
                 item.link and item.link == subscription.last_seen_link
             ):
+                found_watermark = True
                 break
             result.append(item)
-        return result
+        if not found_watermark:
+            logger.warning(
+                "Bili feed watermark missing for %s; resyncing without historical push",
+                subscription.uid,
+            )
+            return []
+
+        last_success_at = self._parse_timestamp(subscription.last_success_at)
+        return [
+            item
+            for item in result
+            if not self.store.has_seen(uid=self._seen_scope(subscription), item_id=item.item_id, link=item.link)
+            and not self._is_stale_item(item, last_success_at)
+        ]
+
+    @staticmethod
+    def _seen_scope(subscription: Subscription) -> str:
+        return f"{subscription.target_origin}\x1f{subscription.uid}"
+
+    @staticmethod
+    def _parse_timestamp(value: str) -> datetime | None:
+        try:
+            return datetime.fromisoformat(str(value or ""))
+        except ValueError:
+            return None
+
+    @classmethod
+    def _is_stale_item(cls, item: FeedItem, last_success_at: datetime | None) -> bool:
+        if last_success_at is None:
+            return False
+        published_at = cls._parse_timestamp(item.published_at)
+        return published_at is not None and published_at <= last_success_at
 
     def _format_item(self, uid: str, item: FeedItem) -> str:
         label = item.author_name or f"UID {uid}"
@@ -798,7 +1172,7 @@ class BiliFeedPlugin(Star):
             for item in preview_items[:backfill]:
                 lines.append(self._format_item(subscription.uid, item))
                 self.store.record_seen(
-                    uid=subscription.uid,
+                    uid=self._seen_scope(subscription),
                     item_id=item.item_id,
                     link=item.link,
                     published_at=item.published_at,

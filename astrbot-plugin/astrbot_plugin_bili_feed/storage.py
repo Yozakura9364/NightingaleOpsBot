@@ -37,6 +37,19 @@ class BiliCredential:
     updated_at: str
 
 
+@dataclass(frozen=True)
+class LiveState:
+    uid: str
+    room_id: str
+    is_live: bool
+    live_started_at: str
+    event_key: str
+    title: str
+    last_checked_at: str
+    failure_count: int
+    last_error: str
+
+
 class BiliFeedStore:
     def __init__(self, data_dir: Path):
         self.data_dir = data_dir
@@ -108,6 +121,21 @@ class BiliFeedStore:
                     cookie_enc TEXT NOT NULL,
                     user_agent_enc TEXT NOT NULL,
                     updated_at TEXT NOT NULL
+                )
+                """
+            )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS live_states (
+                    uid TEXT PRIMARY KEY,
+                    room_id TEXT NOT NULL DEFAULT '',
+                    is_live INTEGER NOT NULL DEFAULT 0,
+                    live_started_at TEXT NOT NULL DEFAULT '',
+                    event_key TEXT NOT NULL DEFAULT '',
+                    title TEXT NOT NULL DEFAULT '',
+                    last_checked_at TEXT NOT NULL DEFAULT '',
+                    failure_count INTEGER NOT NULL DEFAULT 0,
+                    last_error TEXT NOT NULL DEFAULT ''
                 )
                 """
             )
@@ -256,6 +284,103 @@ class BiliFeedStore:
                 """,
                 (uid, item_id, link, published_at, now),
             )
+
+    def has_seen(self, *, uid: str, item_id: str, link: str) -> bool:
+        with self._lock, self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT 1
+                FROM seen_items
+                WHERE uid = ?
+                  AND (
+                    item_id = ?
+                    OR (? <> '' AND link = ?)
+                  )
+                LIMIT 1
+                """,
+                (uid, item_id, link, link),
+            ).fetchone()
+        return row is not None
+
+    def get_live_state(self, uid: str) -> LiveState | None:
+        with self._lock, self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM live_states WHERE uid = ?",
+                (str(uid),),
+            ).fetchone()
+        if not row:
+            return None
+        return LiveState(
+            uid=str(row[0]),
+            room_id=str(row[1] or ""),
+            is_live=bool(row[2]),
+            live_started_at=str(row[3] or ""),
+            event_key=str(row[4] or ""),
+            title=str(row[5] or ""),
+            last_checked_at=str(row[6] or ""),
+            failure_count=int(row[7] or 0),
+            last_error=str(row[8] or ""),
+        )
+
+    def record_live_success(
+        self,
+        *,
+        uid: str,
+        room_id: str,
+        is_live: bool,
+        live_started_at: str,
+        event_key: str,
+        title: str,
+    ) -> None:
+        now = self._now()
+        with self._lock, self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO live_states (
+                    uid, room_id, is_live, live_started_at, event_key,
+                    title, last_checked_at, failure_count, last_error
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, 0, '')
+                ON CONFLICT(uid) DO UPDATE SET
+                    room_id = excluded.room_id,
+                    is_live = excluded.is_live,
+                    live_started_at = excluded.live_started_at,
+                    event_key = excluded.event_key,
+                    title = excluded.title,
+                    last_checked_at = excluded.last_checked_at,
+                    failure_count = 0,
+                    last_error = ''
+                """,
+                (
+                    str(uid),
+                    str(room_id or ""),
+                    1 if is_live else 0,
+                    str(live_started_at or ""),
+                    str(event_key or ""),
+                    str(title or ""),
+                    now,
+                ),
+            )
+
+    def record_live_failure(self, *, uid: str, error: str) -> int:
+        now = self._now()
+        with self._lock, self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO live_states (uid, last_checked_at, failure_count, last_error)
+                VALUES (?, ?, 1, ?)
+                ON CONFLICT(uid) DO UPDATE SET
+                    last_checked_at = excluded.last_checked_at,
+                    failure_count = live_states.failure_count + 1,
+                    last_error = excluded.last_error
+                """,
+                (str(uid), now, str(error)[:1000]),
+            )
+            row = connection.execute(
+                "SELECT failure_count FROM live_states WHERE uid = ?",
+                (str(uid),),
+            ).fetchone()
+        return int(row[0]) if row else 0
 
     def bind_credential(
         self,

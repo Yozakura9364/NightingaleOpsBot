@@ -2,6 +2,7 @@
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width={{ card_width }}">
 <style>
   {% if font_regular %}
   @font-face {
@@ -12,9 +13,9 @@
   }
   {% endif %}
   * { box-sizing: border-box; }
-  html, body { margin: 0; padding: 0; background: #eef2f7; }
-  body { width: {{ card_width }}px; color: #182230; font-family: "NightingaleSourceHan", "Noto Sans CJK SC", "Microsoft YaHei", sans-serif; font-synthesis: weight; }
-  .card { margin: 24px; overflow: hidden; border: 1px solid #dce3ec; border-radius: 18px; background: #ffffff; box-shadow: 0 10px 28px rgba(29, 45, 68, .10); }
+  html, body { width: {{ card_width }}px; margin: 0; padding: 0; background: #eef2f7; overflow-x: hidden; }
+  body { color: #182230; font-family: "NightingaleSourceHan", "Noto Sans CJK SC", "Microsoft YaHei", sans-serif; font-synthesis: weight; }
+  .card { width: {{ card_content_width }}px; margin: 24px; overflow: hidden; border: 1px solid #dce3ec; border-radius: 18px; background: #ffffff; box-shadow: 0 10px 28px rgba(29, 45, 68, .10); }
   .header { display: flex; align-items: center; justify-content: space-between; padding: 24px 28px 18px; background: #f7faff; border-bottom: 1px solid #e8edf4; }
   .author { display: flex; align-items: center; min-width: 0; }
   .author-avatar, .brand-avatar { width: 64px; height: 64px; border-radius: 50%; object-fit: cover; background: #dce5f0; }
