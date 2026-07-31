@@ -1,0 +1,86 @@
+diff --git a/core/parsers/bilibili/__init__.py b/core/parsers/bilibili/__init__.py
+index 594b076..8532461 100644
+--- a/core/parsers/bilibili/__init__.py
++++ b/core/parsers/bilibili/__init__.py
+@@ -10,7 +10,7 @@ from msgspec import convert
+ from astrbot.api import logger
+
+ from ...config import PluginConfig
+-from ...data import ImageContent, MediaContent, Platform
++from ...data import ImageContent, MediaContent, Platform, TextContent
+ from ...exception import DownloadException, DurationLimitException
+ from ..base import (
+     BaseParser,
+@@ -153,61 +153,19 @@ class BilibiliParser(BaseParser):
+         # 处理分 p
+         page_info = video_info.extract_info_with_page(page_num)
+
+-        # 获取 AI 总结（默认提示）
+-        ai_summary = ""
+-        if self.login._credential:
+-            try:
+-                cid = await video.get_cid(page_info.index)
+-                ai_conclusion = await video.get_ai_conclusion(cid)
+-                ai_conclusion = convert(ai_conclusion, AIConclusion)
+-                ai_summary = ai_conclusion.summary
+-            except Exception:
+-                ai_summary = "哔哩哔哩 cookie 未配置或失效, 无法使用 AI 总结"
+-
+         url = f"https://bilibili.com/{video_info.bvid}"
+         url += f"?p={page_info.index + 1}" if page_info.index > 0 else ""
+-
+-        # 视频下载 task
+-        async def download_video():
+-            output_path = self.cfg.cache_dir / f"{video_info.bvid}-{page_num}.mp4"
+-            if output_path.exists():
+-                return output_path
+-            v_url, a_url = await self.extract_download_urls(
+-                video=video, page_index=page_info.index
+-            )
+-            if page_info.duration > self.cfg.max_duration:
+-                raise DurationLimitException
+-            if a_url is not None:
+-                return await self.downloader.download_av_and_merge(
+-                    v_url,
+-                    a_url,
+-                    output_path=output_path,
+-                    headers=self.headers,
+-                    proxy=self.proxy,
+-                )
+-            else:
+-                return await self.downloader.streamd(
+-                    v_url,
+-                    file_name=output_path.name,
+-                    headers=self.headers,
+-                    proxy=self.proxy,
+-                )
+-
+-        video_task = asyncio.create_task(download_video())
+-        video_content = self.create_video_content(
+-            video_task,
+-            page_info.cover,
+-            page_info.duration,
+-        )
++        lines = [f"标题: {page_info.title}"]
++        if video_info.desc:
++            lines.append(f"简介: {video_info.desc}")
++        text_content = TextContent("\n".join(line for line in lines if line).strip())
+
+         return self.result(
+             url=url,
+             title=page_info.title,
+             timestamp=page_info.timestamp,
+-            text=text,
+             author=author,
+-            contents=[video_content],
+-            extra={"info": ai_summary},
++            contents=[text_content],
+         )
+
+     async def parse_dynamic(self, dynamic_id: int):
+@@ -442,4 +400,3 @@ class BilibiliParser(BaseParser):
+         return video_stream.url, audio_stream.url
+
+
+-
+         )
