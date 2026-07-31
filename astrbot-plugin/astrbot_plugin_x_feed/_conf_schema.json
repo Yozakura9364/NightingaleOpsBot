@@ -26,8 +26,8 @@
   "twikit_proxy_url": {
     "description": "Twikit 抓取代理",
     "type": "string",
-    "default": "http://172.19.0.1:7890",
-    "hint": "留空则直连。与图片代理分开配置，便于单独排查。"
+    "default": "http://100.74.24.101:7890",
+    "hint": "留空则直连。当前正文通过 Tailscale 访问本机 7890 代理。"
   },
   "twikit_timeline_count": {
     "description": "Twikit 每次抓取条数",
@@ -65,13 +65,14 @@
   "max_images_per_post": {
     "description": "每条更新最多发送图片数",
     "type": "int",
-    "default": 1
+    "default": 4,
+    "hint": "X 普通图片动态最多包含 4 张图片；代码会将配置强制限制在 0-4。"
   },
   "image_proxy_url": {
     "description": "图片下载代理",
     "type": "string",
-    "default": "http://172.19.0.1:7890",
-    "hint": "AstrBot 容器下载 X 图片时使用。留空则直连。"
+    "default": "http://100.74.24.101:7890",
+    "hint": "AstrBot 容器下载 X 图片时使用。当前与正文统一通过 Tailscale 访问本机 7890 代理；留空则直连。"
   },
   "image_download_timeout_seconds": {
     "description": "图片下载超时秒数",

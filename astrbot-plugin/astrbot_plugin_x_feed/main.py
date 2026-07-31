@@ -132,7 +132,7 @@ class XFeedPlugin(Star):
         return str(self.config.get("twikit_locale", "en-US") or "en-US").strip() or "en-US"
 
     def _twikit_proxy_url(self) -> str:
-        return str(self.config.get("twikit_proxy_url", "http://172.19.0.1:7890") or "").strip()
+        return str(self.config.get("twikit_proxy_url", "http://100.74.24.101:7890") or "").strip()
 
     def _twikit_timeline_count(self) -> int:
         return max(1, int(self.config.get("twikit_timeline_count", 5) or 5))
@@ -151,10 +151,10 @@ class XFeedPlugin(Star):
         return bool(self.config.get("include_images", True))
 
     def _max_images_per_post(self) -> int:
-        return max(0, int(self.config.get("max_images_per_post", 1) or 0))
+        return min(4, max(0, int(self.config.get("max_images_per_post", 4) or 0)))
 
     def _image_proxy_url(self) -> str:
-        return str(self.config.get("image_proxy_url", "http://172.19.0.1:7890") or "").strip()
+        return str(self.config.get("image_proxy_url", "http://100.74.24.101:7890") or "").strip()
 
     def _image_download_timeout_seconds(self) -> int:
         return max(3, int(self.config.get("image_download_timeout_seconds", 20) or 20))
