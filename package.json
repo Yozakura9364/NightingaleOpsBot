@@ -5,8 +5,13 @@
   "type": "module",
   "scripts": {
     "start": "node runner/server.mjs",
-    "check": "node --check runner/server.mjs && node --check runner/jobs.mjs && node --check runner/tencentCloudTraffic.mjs && node --check runner/systemHealth.mjs && node --check runner/armoireStoreLatest.mjs && node --check runner/risingstoneQrSessions.mjs && node --check runner/sqmallQrSessions.mjs && node --check tools/probe-risingstone-qr-login.mjs && node --check tools/probe-ffxiv-watch-sources.mjs",
+    "check": "node --check runner/server.mjs && node --check runner/jobs.mjs && node --check runner/tencentCloudTraffic.mjs && node --check runner/systemHealth.mjs && node --check runner/armoireStoreLatest.mjs && node --check runner/fashionCheckScoring.mjs && node --check runner/fashionCheckSources.mjs && node --check runner/fashionCheckCollector.mjs && node --check runner/fashionCheckTimerClient.mjs && node --check runner/risingstoneQrSessions.mjs && node --check runner/sqmallQrSessions.mjs && node --check tools/probe-risingstone-qr-login.mjs && node --check tools/probe-ffxiv-watch-sources.mjs",
+    "test:fashion-check": "node --test tests/fashionCheckCollector.test.mjs",
     "probe:risingstone-login": "node tools/probe-risingstone-qr-login.mjs",
     "probe:ffxiv-watch": "node tools/probe-ffxiv-watch-sources.mjs"
+  },
+  "dependencies": {
+    "cheerio": "^1.0.0",
+    "undici": "^6.27.0"
   }
 }

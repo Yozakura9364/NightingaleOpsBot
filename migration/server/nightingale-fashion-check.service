@@ -1,0 +1,16 @@
+[Unit]
+Description=Nightingale Fashion Check collection tick
+After=network-online.target nightingale-ops-runner.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/nightingale/NightingaleOpsBot
+Environment=NODE_ENV=production
+EnvironmentFile=/opt/nightingale/NightingaleOpsBot/.local/runner.env
+ExecStart=/usr/bin/node /opt/nightingale/NightingaleOpsBot/runner/fashionCheckTimerClient.mjs
+User=nightingale
+Group=nightingale
+
+[Install]
+WantedBy=multi-user.target

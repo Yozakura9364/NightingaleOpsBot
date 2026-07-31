@@ -55,5 +55,17 @@
     "type": "int",
     "default": 300,
     "hint": "建议不低于 300，避免频繁调用外部 API 和刷屏。"
+  },
+  "fashion_check_notify_enabled": {
+    "description": "是否启用时尚品鉴采集通知",
+    "type": "bool",
+    "default": true,
+    "hint": "需要先私聊发送 /fc bind 绑定独立接收窗口。"
+  },
+  "fashion_check_notify_interval_seconds": {
+    "description": "时尚品鉴通知队列检查间隔秒数",
+    "type": "int",
+    "default": 60,
+    "hint": "只读取服务器本地通知队列，不会按此频率访问外部网站。"
   }
 }

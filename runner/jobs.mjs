@@ -18,6 +18,14 @@ import {
   prepareSyncStoreCatalogMirror,
   syncStoreCatalogMirror
 } from './armoireStoreLatest.mjs'
+import {
+  ackFashionCheckNotification,
+  getFashionCheckAnswer,
+  getFashionCheckSubscriberUpdates,
+  getFashionCheckStatus,
+  peekFashionCheckNotification,
+  runFashionCheckTick
+} from './fashionCheckCollector.mjs'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const PROJECT_ROOT = resolve(process.env.NS_OPS_PROJECT_ROOT || resolve(__dirname, '..'))
@@ -431,6 +439,53 @@ export const jobs = new Map(
           output: await getSystemAlertsReport()
         }
       }
+    },
+    'fashion-check.tick': {
+      title: '时尚品鉴自动采集',
+      description: '按北京时间窗口采集时尚品鉴公开来源。',
+      readOnly: false,
+      run: async (payload) => runFashionCheckTick(payload)
+    },
+    'fashion-check.answer': {
+      title: '本周时尚品鉴答案',
+      description: '返回可公开发送到群聊的本周答案。',
+      readOnly: true,
+      run: async (payload) => ({ ok: true, output: await getFashionCheckAnswer(payload) })
+    },
+    'fashion-check.status': {
+      title: '时尚品鉴采集状态',
+      description: '查看当前周次、来源和通知队列。',
+      readOnly: true,
+      run: async () => ({ ok: true, output: await getFashionCheckStatus() })
+    },
+    'fashion-check.notifications.peek': {
+      title: '读取时尚品鉴通知',
+      description: '读取一条尚未发送的 QQ 通知。',
+      readOnly: true,
+      run: async () => ({
+        ok: true,
+        output: JSON.stringify(await peekFashionCheckNotification())
+      })
+    },
+    'fashion-check.notifications.ack': {
+      title: '确认时尚品鉴通知',
+      description: '在 QQ 成功发送后确认消费通知。',
+      readOnly: false,
+      run: async (payload) => ({
+        ok: true,
+        output: JSON.stringify({
+          acknowledged: await ackFashionCheckNotification(payload.id)
+        })
+      })
+    },
+    'fashion-check.subscriber-updates': {
+      title: '时尚品鉴订阅更新',
+      description: '读取最近有效的时尚品鉴订阅更新，不包含订阅者信息。',
+      readOnly: true,
+      run: async () => ({
+        ok: true,
+        output: JSON.stringify(await getFashionCheckSubscriberUpdates())
+      })
     },
     'cloud.tencent.traffic.today': {
       title: '腾讯云今日流量',

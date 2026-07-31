@@ -20,6 +20,7 @@ def format_help() -> str:
             "/ns traffic debug",
             "/ns traffic status",
             "/ns traffic bind",
+            "/fc（公开查询本周时尚品鉴答案）",
             "/ns v2 status",
             "/ns v2 check",
             "/ns v2 build",

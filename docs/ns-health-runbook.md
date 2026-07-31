@@ -24,6 +24,13 @@ QQ 命令：
 /ns alerts
 /ns traffic bind
 /ns traffic status
+/fc
+/fc follow
+/fc unfollow
+/fc bind
+/fc status
+/fc check
+/fc unbind
 ```
 
 说明：
@@ -32,6 +39,13 @@ QQ 命令：
 - `/ns daily`：手动生成每日状态报告。
 - `/ns alerts`：只返回当前是否有需要主动推送的告警；正常时为 `OK`。
 - `/ns traffic bind`：绑定私聊接收窗口。每日状态和自动告警都复用这个绑定，不会推到群里。
+- `/fc`：群聊和私聊均可查询本周答案；本周数据尚未更新时不会返回上周答案。
+- `/fc follow`：用户可订阅当前私聊；已授权管理员也可在群内订阅当前群。不会补发订阅前的历史消息。
+- `/fc unfollow`：取消当前私聊订阅；已授权管理员也可取消当前群订阅。
+- `/fc bind`：管理员单独绑定时尚品鉴采集通知私聊，不复用流量日报绑定。
+- `/fc status`：管理员查看当前周次、来源状态和通知队列。
+- `/fc check`：管理员手动执行一次完整来源检查；定时任务仍只在规定窗口访问来源。
+- `/fc unbind`：管理员取消时尚品鉴自动采集通知。
 
 ## 检查项
 
@@ -108,6 +122,23 @@ NS_HEALTH_ERROR_LOG_ALERT=true
 ```
 
 ## Runner 环境变量
+
+### 时尚品鉴自动采集
+
+`nightingale-fashion-check.timer` 每小时的 `:05` 唤醒一次。采集器在北京时间窗口外直接退出：
+
+- 周二 16:05 至周三 16:05：QQ 主题、部位和标签。
+- 周五 16:05 至周六 16:05：QQ、AvantGarde tracker 和 AllGameStaff 装备/染色/方案。
+
+安装后检查：
+
+```bash
+systemctl status nightingale-fashion-check.timer --no-pager
+systemctl list-timers nightingale-fashion-check.timer --no-pager
+journalctl -u nightingale-fashion-check.service --since '2 hours ago' --no-pager
+```
+
+私有数据默认位于 `/opt/nightingale/NightingaleOpsBot/.local/fashion-check/`。QQ 原始 JSONP 不落盘，只保留去除账号、会话、trace 和客户端地址后的单元格派生数据。
 
 可选配置写在：
 

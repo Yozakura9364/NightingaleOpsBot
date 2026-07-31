@@ -1,4 +1,5 @@
 import asyncio
+import json
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -7,7 +8,7 @@ from astrbot.api.event import AstrMessageEvent, MessageChain, filter
 import astrbot.api.message_components as Comp
 from astrbot.api.star import Context, Star, register
 
-from .formatters import format_health, format_help, format_job_response
+from .formatters import clamp_text, format_health, format_help, format_job_response
 from .ops_client import NsOpsClient
 
 
@@ -37,7 +38,11 @@ class NsOpsPlugin(Star):
         self._traffic_task: asyncio.Task | None = None
 
     async def initialize(self) -> None:
-        if self.config.get("traffic_report_enabled", True):
+        if (
+            self.config.get("traffic_report_enabled", True)
+            or self.config.get("health_alert_enabled", True)
+            or self.config.get("fashion_check_notify_enabled", True)
+        ):
             self._traffic_task = asyncio.create_task(self._traffic_report_loop())
             logger.info("NS Ops traffic report loop started.")
 
@@ -85,6 +90,23 @@ class NsOpsPlugin(Star):
         return message
 
     @staticmethod
+    def _strip_fc_prefix(text: str) -> str:
+        normalized = (text or "").strip()
+        lowered = normalized.lower()
+        if lowered in {"/fc", "fc"}:
+            return ""
+        if lowered.startswith("/fc "):
+            return normalized[4:].strip()
+        if lowered.startswith("fc "):
+            return normalized[3:].strip()
+        return normalized
+
+    def _extract_fc_remainder(self, event: AstrMessageEvent, raw: str = "") -> str:
+        message = self._strip_fc_prefix(event.message_str or "")
+        raw = raw.strip()
+        return self._strip_fc_prefix(raw) if raw and len(raw.split()) >= len(message.split()) else message
+
+    @staticmethod
     def _argument_after(text: str, prefix: str) -> str:
         value = (text or "").strip()
         if value.lower().startswith(prefix.lower()):
@@ -120,6 +142,8 @@ class NsOpsPlugin(Star):
             try:
                 await self._maybe_send_traffic_report()
                 await self._maybe_send_health_alert()
+                await self._maybe_send_fashion_check_notification()
+                await self._maybe_send_fashion_check_subscriber_updates()
             except asyncio.CancelledError:
                 raise
             except Exception as error:
@@ -197,6 +221,233 @@ class NsOpsPlugin(Star):
 
         await self.context.send_message(origin, MessageChain([Comp.Plain(normalized)]))
         await self.put_kv_data("health_alert_last_signature", signature)
+
+    async def _maybe_send_fashion_check_notification(self) -> None:
+        if not self.config.get("fashion_check_notify_enabled", True):
+            return
+        origin = str(await self.get_kv_data("fashion_check_origin", "") or "").strip()
+        if not origin:
+            return
+        now = datetime.now(ZoneInfo("Asia/Shanghai"))
+        interval_seconds = max(
+            30,
+            int(self.config.get("fashion_check_notify_interval_seconds", 60) or 60),
+        )
+        last_checked = float(
+            await self.get_kv_data("fashion_check_notify_last_checked_at", "0") or 0
+        )
+        if now.timestamp() - last_checked < interval_seconds:
+            return
+        await self.put_kv_data("fashion_check_notify_last_checked_at", str(now.timestamp()))
+
+        raw = await self._run_job_raw_text("fashion-check/notifications/peek")
+        notification = json.loads(raw or "null")
+        if not notification:
+            return
+        notification_id = str(notification.get("id", "") or "").strip()
+        text = str(notification.get("text", "") or "").strip()
+        if not notification_id or not text:
+            logger.error("Invalid Fashion Check notification payload: %s", raw[:500])
+            return
+        await self.context.send_message(origin, MessageChain([Comp.Plain(text)]))
+        ack_raw = await self._run_job_raw_text(
+            "fashion-check/notifications/ack",
+            {"id": notification_id},
+        )
+        ack = json.loads(ack_raw or "{}")
+        if not ack.get("acknowledged"):
+            logger.warning("Fashion Check notification was sent but not acknowledged: %s", notification_id)
+
+    async def _get_fashion_check_subscribers(self) -> dict[str, str]:
+        raw = await self.get_kv_data("fashion_check_subscribers", "{}")
+        try:
+            payload = json.loads(str(raw or "{}"))
+        except json.JSONDecodeError:
+            logger.warning("Invalid Fashion Check subscriber registry; resetting it.")
+            return {}
+        if not isinstance(payload, dict):
+            return {}
+        return {
+            str(origin).strip(): str(cursor).strip()
+            for origin, cursor in payload.items()
+            if str(origin).strip()
+        }
+
+    async def _put_fashion_check_subscribers(self, subscribers: dict[str, str]) -> None:
+        await self.put_kv_data(
+            "fashion_check_subscribers",
+            json.dumps(subscribers, ensure_ascii=False, separators=(",", ":")),
+        )
+
+    async def _get_fashion_check_subscriber_updates(self) -> tuple[list[dict], str]:
+        raw = await self._run_job_raw_text("fashion-check/subscriber-updates")
+        payload = json.loads(raw or "{}")
+        if not isinstance(payload, dict):
+            return [], ""
+        items = payload.get("items")
+        if not isinstance(items, list):
+            return [], ""
+        return (
+            [item for item in items if isinstance(item, dict) and item.get("id") and item.get("text")],
+            str(payload.get("latestId", "") or ""),
+        )
+
+    async def _maybe_send_fashion_check_subscriber_updates(self) -> None:
+        if not self.config.get("fashion_check_notify_enabled", True):
+            return
+
+        subscribers = await self._get_fashion_check_subscribers()
+        if not subscribers:
+            return
+        items, latest_id = await self._get_fashion_check_subscriber_updates()
+        if not items:
+            return
+
+        item_ids = [str(item["id"]) for item in items]
+        changed = False
+        for origin, cursor in list(subscribers.items()):
+            if cursor == "__none__":
+                pending = items
+            elif cursor in item_ids:
+                pending = items[item_ids.index(cursor) + 1 :]
+            else:
+                subscribers[origin] = latest_id
+                changed = True
+                continue
+
+            for update in pending:
+                try:
+                    await self.context.send_message(
+                        origin,
+                        MessageChain([Comp.Plain(str(update["text"]))]),
+                    )
+                except Exception as error:
+                    logger.warning("Fashion Check subscriber delivery failed: %s", error)
+                    break
+                subscribers[origin] = str(update["id"])
+                changed = True
+
+        if changed:
+            await self._put_fashion_check_subscribers(subscribers)
+
+    @filter.command("fc")
+    async def handle_fc(self, event: AstrMessageEvent, raw: str = ""):
+        remainder = self._extract_fc_remainder(event, raw)
+        parts = remainder.split()
+        sub = parts[0].lower() if parts else ""
+
+        try:
+            if not sub:
+                text = await self._run_job_raw_text("fashion-check/answer")
+                yield event.plain_result(clamp_text(text, self.max_output_chars))
+                return
+
+            if sub in {"help", "帮助"}:
+                yield event.plain_result(
+                    "用法：/fc | /fc follow | /fc unfollow\n"
+                    "管理员：/fc status | /fc bind | /fc check | /fc unbind"
+                )
+                return
+
+            if sub in {"follow", "订阅"}:
+                is_private = self._is_private(event)
+                if not is_private and not self._is_allowed(event):
+                    yield event.plain_result("权限不足：群订阅仅限已授权管理员设置。")
+                    return
+                origin = str(getattr(event, "unified_msg_origin", "") or "").strip()
+                if not origin:
+                    yield event.plain_result("当前会话来源无法记录，请稍后重试。")
+                    return
+                subscribers = await self._get_fashion_check_subscribers()
+                if origin in subscribers:
+                    yield event.plain_result(
+                        "当前私聊已订阅时尚品鉴每周更新。"
+                        if is_private
+                        else "当前群已订阅时尚品鉴每周更新。"
+                    )
+                    return
+                _, latest_id = await self._get_fashion_check_subscriber_updates()
+                subscribers[origin] = latest_id or "__none__"
+                await self._put_fashion_check_subscribers(subscribers)
+                yield event.plain_result(
+                    "已订阅时尚品鉴每周更新。"
+                    if is_private
+                    else "已为当前群订阅时尚品鉴每周更新。"
+                )
+                return
+
+            if sub in {"unfollow", "取消订阅"}:
+                is_private = self._is_private(event)
+                if not is_private and not self._is_allowed(event):
+                    yield event.plain_result("权限不足：群订阅仅限已授权管理员设置。")
+                    return
+                origin = str(getattr(event, "unified_msg_origin", "") or "").strip()
+                subscribers = await self._get_fashion_check_subscribers()
+                if origin not in subscribers:
+                    yield event.plain_result(
+                        "当前私聊没有订阅时尚品鉴更新。"
+                        if is_private
+                        else "当前群没有订阅时尚品鉴更新。"
+                    )
+                    return
+                del subscribers[origin]
+                await self._put_fashion_check_subscribers(subscribers)
+                yield event.plain_result(
+                    "已取消时尚品鉴每周更新。"
+                    if is_private
+                    else "已取消当前群的时尚品鉴每周更新。"
+                )
+                return
+
+            if not self._is_allowed(event):
+                yield event.plain_result("权限不足：该 /fc 子命令仅限已授权管理员使用。")
+                return
+
+            if sub == "bind":
+                if not self._is_private(event):
+                    yield event.plain_result("请私聊发送 /fc bind，采集通知不会推到群里。")
+                    return
+                origin = str(getattr(event, "unified_msg_origin", "") or "").strip()
+                if not origin:
+                    yield event.plain_result("当前私聊来源无法记录，请稍后重试。")
+                    return
+                await self.put_kv_data("fashion_check_origin", origin)
+                await self.put_kv_data("fashion_check_bound_by", str(event.get_sender_id()))
+                yield event.plain_result(
+                    "已绑定当前私聊为时尚品鉴自动采集通知窗口。\n"
+                    "采集窗口：周二 16:05 至周三 16:05、周五 16:05 至周六 16:05。"
+                )
+                return
+
+            if sub == "unbind":
+                await self.put_kv_data("fashion_check_origin", "")
+                await self.put_kv_data("fashion_check_bound_by", "")
+                yield event.plain_result("已取消时尚品鉴自动采集通知。")
+                return
+
+            if sub == "status":
+                origin = str(await self.get_kv_data("fashion_check_origin", "") or "").strip()
+                text = await self._run_job_raw_text("fashion-check/status")
+                yield event.plain_result(
+                    clamp_text(
+                        f"通知绑定：{'已绑定' if origin else '未绑定'}\n\n{text}",
+                        self.max_output_chars,
+                    )
+                )
+                return
+
+            if sub == "check":
+                async for result in self._run_job(event, "fashion-check/tick", {"force": True}):
+                    yield result
+                await self._maybe_send_fashion_check_notification()
+                return
+
+            yield event.plain_result(
+                "用法：/fc | /fc follow | /fc unfollow | /fc status | /fc bind | /fc check | /fc unbind"
+            )
+        except Exception as error:
+            logger.exception("Fashion Check command failed")
+            yield event.plain_result(f"时尚品鉴调用失败：{error}")
 
     @filter.command("ns")
     async def handle_ns(self, event: AstrMessageEvent, raw: str = ""):

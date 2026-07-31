@@ -1,0 +1,11 @@
+[Unit]
+Description=Run Nightingale Fashion Check collector hourly at minute 05
+
+[Timer]
+OnCalendar=*-*-* *:05:00 Asia/Shanghai
+Persistent=true
+AccuracySec=1s
+Unit=nightingale-fashion-check.service
+
+[Install]
+WantedBy=timers.target
