@@ -5,9 +5,12 @@ import html
 import json
 import re
 from dataclasses import dataclass
+from hashlib import sha256
 from pathlib import Path
 from typing import Any
+from urllib.error import URLError
 from urllib.parse import parse_qsl, urlencode, unquote, urlparse, urlunparse
+from urllib.request import Request, urlopen
 
 from astrbot.api import AstrBotConfig, logger
 from astrbot.api.event import AstrMessageEvent, MessageChain, filter
@@ -90,6 +93,11 @@ def _platform_ignored(url: str, ignored_platforms: set[str]) -> bool:
     if not ignored_platforms:
         return False
     return platform_label(url).strip().lower() in ignored_platforms
+
+
+def _is_weibo_url(url: str) -> bool:
+    host = (urlparse(str(url or "").strip()).hostname or "").lower().strip(".")
+    return host == "t.cn" or host == "weibo.com" or host.endswith(".weibo.com") or host == "weibo.cn" or host.endswith(".weibo.cn")
 
 
 def _event_group_id(event: AstrMessageEvent) -> str:
@@ -501,6 +509,7 @@ class ShareLinkResolverPlugin(Star):
         self.config = config
         self.data_dir = Path(__file__).resolve().parent / ".local"
         self.card_dir = self.data_dir / "cards"
+        self.bilibili_image_dir = self.data_dir / "bilibili-originals"
 
     def _allowed(self, event: AstrMessageEvent) -> bool:
         group_id = _event_group_id(event)
@@ -614,8 +623,10 @@ class ShareLinkResolverPlugin(Star):
         links = [
             link
             for link in links
-            if not _platform_ignored(link, _split_items(self.config.get("ignored_platforms", "bilibili")))
+            if not _platform_ignored(link, _split_items(self.config.get("ignored_platforms", "")))
         ]
+        if any(_is_weibo_url(link) for link in links):
+            return
         if not links:
             if has_json_payload and _bool_config(self.config, "debug_log", False):
                 logger.info("QQ share link resolver found no usable links.")
@@ -635,8 +646,12 @@ class ShareLinkResolverPlugin(Star):
                 max_links=_int_config(self.config, "max_images_per_message", 1),
             )
         if _bool_config(self.config, "render_card_images", True):
-            card_path = await self._render_payload_card(payloads, links[0], images[0] if images else "")
+            content = await self._build_payload_card(payloads, links[0], images[0] if images else "")
+            card_path = await self._render_card(content) if content is not None else None
             if card_path:
+                if content is not None and content.source == "Bilibili":
+                    await self._send_bilibili_result(event, content, card_path)
+                    return
                 await event.send(MessageChain([Comp.Plain(text)]))
                 await event.send(MessageChain([Comp.Image.fromFileSystem(str(card_path))]))
                 return
@@ -677,46 +692,125 @@ class ShareLinkResolverPlugin(Star):
 
     async def _render_payload_card(self, payloads: list[Any], url: str, cover_url: str) -> Path | None:
         try:
-            source = platform_label(url)
-            fetched: CardContent | None = None
-            if source in {"NGA", "微博", "米游社", "TapTap", "库街区", "小黑盒"}:
-                try:
-                    timeout_seconds = _int_config(self.config, "fetch_timeout_seconds", 12)
-                    max_bytes = _int_config(self.config, "fetch_max_bytes", 1500000, minimum=100000)
-                    if source == "NGA":
-                        fetched = await fetch_nga_thread_card(url, timeout_seconds=timeout_seconds, max_bytes=max_bytes)
-                    else:
-                        fetched = await fetch_url_card(url, timeout_seconds=timeout_seconds, max_bytes=max_bytes)
-                    if _bool_config(self.config, "debug_log", False):
-                        logger.info("QQ share card fetched %s content with %s post(s).", source, len(fetched.posts))
-                except Exception as error:
-                    logger.info("QQ share card fetch fallback for %s: %s", source, error)
-            if fetched and fetched.posts:
-                content = fetched
-            elif source == "NGA":
-                content = CardContent(
-                    source=source,
-                    title=(fetched.title if fetched else "") or _extract_first_title(payloads) or source,
-                    url=url,
-                    description=(fetched.description if fetched and fetched.description else "正文抓取失败，可打开链接查看。"),
-                    cover_url="",
-                    footer="NGA 抓取未获取到正文",
-                    posts=(),
-                )
-            else:
-                content = CardContent(
-                    source=source,
-                    title=_best_card_title(fetched, payloads, source),
-                    url=url,
-                    description=(fetched.description if fetched else "") or _extract_first_description(payloads),
-                    cover_url=(fetched.cover_url if fetched else "") or cover_url,
-                    footer="由 QQ 分享卡片生成",
-                    posts=fetched.posts if fetched else (),
-                )
-            return await self._render_card(content)
+            content = await self._build_payload_card(payloads, url, cover_url)
+            return await self._render_card(content) if content is not None else None
         except Exception as error:
             logger.warning("QQ share card render failed: %s", error)
             return None
+
+    async def _build_payload_card(
+        self,
+        payloads: list[Any],
+        url: str,
+        cover_url: str,
+    ) -> CardContent | None:
+        source = platform_label(url)
+        fetched: CardContent | None = None
+        if source in {"Bilibili", "NGA", "微博", "米游社", "TapTap", "库街区", "小黑盒"}:
+            try:
+                timeout_seconds = _int_config(self.config, "fetch_timeout_seconds", 12)
+                max_bytes = _int_config(self.config, "fetch_max_bytes", 1500000, minimum=100000)
+                if source == "NGA":
+                    fetched = await fetch_nga_thread_card(url, timeout_seconds=timeout_seconds, max_bytes=max_bytes)
+                else:
+                    fetched = await fetch_url_card(url, timeout_seconds=timeout_seconds, max_bytes=max_bytes)
+                if _bool_config(self.config, "debug_log", False):
+                    logger.info("QQ share card fetched %s content with %s post(s).", source, len(fetched.posts))
+            except Exception as error:
+                logger.info("QQ share card fetch fallback for %s: %s", source, error)
+        if fetched and fetched.posts:
+            return fetched
+        if source == "NGA":
+            return CardContent(
+                source=source,
+                title=(fetched.title if fetched else "") or _extract_first_title(payloads) or source,
+                url=url,
+                description=(fetched.description if fetched and fetched.description else "正文抓取失败，可打开链接查看。"),
+                cover_url="",
+                footer="NGA 抓取未获取到正文",
+                posts=(),
+            )
+        return CardContent(
+            source=source,
+            title=_best_card_title(fetched, payloads, source),
+            url=url,
+            description=(fetched.description if fetched else "") or _extract_first_description(payloads),
+            cover_url=(fetched.cover_url if fetched else "") or cover_url,
+            footer="由 QQ 分享卡片生成",
+            posts=fetched.posts if fetched else (),
+        )
+
+    def _bilibili_image_urls(self, content: CardContent) -> list[str]:
+        results: list[str] = []
+        candidates = [content.cover_url]
+        for post in content.posts:
+            candidates.extend(post.image_urls)
+        for image_url in candidates:
+            value = str(image_url or "").strip()
+            if value and value not in results:
+                results.append(value)
+        return results[: _int_config(self.config, "bilibili_max_original_images", 3, minimum=0)]
+
+    async def _send_bilibili_result(
+        self,
+        event: AstrMessageEvent,
+        content: CardContent,
+        card_path: Path,
+    ) -> None:
+        components: list[Comp.BaseMessageComponent] = [Comp.Image.fromFileSystem(str(card_path))]
+        if content.url:
+            components.append(Comp.Plain(content.url))
+        if _bool_config(self.config, "send_images", True):
+            for image_url in self._bilibili_image_urls(content):
+                try:
+                    image_path = await asyncio.to_thread(self._download_bilibili_image, image_url)
+                    components.append(Comp.Image.fromFileSystem(str(image_path)))
+                except Exception as error:
+                    logger.warning("Bilibili original image download failed for %s: %s", image_url, error)
+
+        if _event_group_id(event) and _bool_config(self.config, "bilibili_group_use_forward", True):
+            node = Comp.Node(
+                content=components,
+                name=str(self.config.get("forward_display_name", "Yoine♡") or "Yoine♡").strip(),
+                uin=str(self.config.get("forward_display_uin", "1756507015") or "1756507015").strip(),
+            )
+            await event.send(MessageChain([Comp.Nodes([node])]))
+            return
+
+        for component in components:
+            await event.send(MessageChain([component]))
+
+    def _download_bilibili_image(self, image_url: str) -> Path:
+        parsed = urlparse(str(image_url or "").strip())
+        if parsed.scheme not in {"http", "https"}:
+            raise ValueError("Bilibili image URL scheme is unsupported.")
+
+        extension = Path(parsed.path).suffix.lower()
+        if extension not in {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"}:
+            extension = ".jpg"
+        target = self.bilibili_image_dir / f"{sha256(image_url.encode('utf-8')).hexdigest()[:24]}{extension}"
+        max_bytes = 12_000_000
+        if target.exists() and 0 < target.stat().st_size <= max_bytes:
+            return target
+
+        request = Request(
+            image_url,
+            headers={
+                "User-Agent": "Mozilla/5.0 NightingaleOpsBot-ShareCard/1.0",
+                "Referer": "https://www.bilibili.com/",
+            },
+        )
+        try:
+            with urlopen(request, timeout=20) as response:
+                data = response.read(max_bytes + 1)
+        except (OSError, URLError, ValueError) as error:
+            raise RuntimeError(f"Bilibili image request failed: {error}") from error
+        if len(data) > max_bytes:
+            raise ValueError("Bilibili image exceeds the 12 MB limit.")
+
+        self.bilibili_image_dir.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(data)
+        return target
 
     async def _render_card(self, content: CardContent) -> Path:
         width = _int_config(self.config, "card_width", 760, minimum=480)

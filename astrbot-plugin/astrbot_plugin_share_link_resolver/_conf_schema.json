@@ -49,6 +49,12 @@
     "default": "",
     "hint": "逗号分隔。留空使用内置列表。"
   },
+  "ignored_platforms": {
+    "description": "忽略的平台",
+    "type": "string",
+    "default": "",
+    "hint": "逗号分隔。留空表示不忽略平台；例如填写 bilibili 可关闭 B 站卡片增强解析。"
+  },
   "send_images": {
     "description": "发送卡片配图",
     "type": "bool",
@@ -85,6 +91,28 @@
     "description": "每条消息最多发送图片数",
     "type": "int",
     "default": 1
+  },
+  "bilibili_group_use_forward": {
+    "description": "B站群聊使用合并转发",
+    "type": "bool",
+    "default": true,
+    "hint": "开启后，B站链接解析会把卡片、原链接和原图合并发送。"
+  },
+  "bilibili_max_original_images": {
+    "description": "B站最多发送原图数",
+    "type": "int",
+    "default": 3
+  },
+  "forward_display_name": {
+    "description": "合并转发显示名",
+    "type": "string",
+    "default": "Yoine♡"
+  },
+  "forward_display_uin": {
+    "description": "合并转发显示 QQ 号",
+    "type": "string",
+    "default": "1756507015",
+    "hint": "默认使用当前机器人 QQ；NapCat 账号变化时需要同步修改。"
   },
   "image_domains": {
     "description": "识别为配图的域名",

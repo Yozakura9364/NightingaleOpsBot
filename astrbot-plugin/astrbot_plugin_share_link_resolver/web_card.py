@@ -1614,10 +1614,25 @@ def _nga_user_info_map(html_text: str) -> dict[str, dict]:
 
 def _clean_nga_content(text: str) -> str:
     value = html.unescape(str(text or ""))
+
+    # ── preserve quote blocks: prefix each line with \x01 ──────────
+    def _mark_quote_lines(match):
+        inner = match.group(1)
+        return "\n".join(
+            "\x01" + line for line in inner.splitlines() if line.strip()
+        )
+
+    value = re.sub(
+        r"\[quote(?:=[^\]]*)?\](.*?)\[/quote\]",
+        _mark_quote_lines,
+        value,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    # strip leftover orphan quote tags
+    value = re.sub(r"\[/?quote(?:=[^\]]*)?\]", "\n", value, flags=re.IGNORECASE)
+
     replacements = [
         (r"\[br\]", "\n"),
-        (r"\[/quote\]", "\n"),
-        (r"\[quote\]", ""),
         (r"\[img\].*?\[/img\]", ""),
         (r"\[s:([^\]]+)\]", lambda match: _nga_smiley_inline_token(match.group(1))),
         (r"\[url(?:=[^\]]+)?\](.*?)\[/url\]", r"\1"),
@@ -1628,10 +1643,7 @@ def _clean_nga_content(text: str) -> str:
     value = re.sub(r"\[[a-zA-Z0-9_/*=\-:#%,.\s]+\]", "", value)
     value = re.sub(r"\s*\n\s*", "\n", value)
     value = re.sub(r"[ \t]{2,}", " ", value)
-    value = value.strip()
-    if len(value) > 620:
-        value = value[:617].rstrip() + "..."
-    return value
+    return value.strip()
 
 
 def _clean_weibo_title(title: str) -> str:

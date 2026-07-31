@@ -105,6 +105,9 @@ Current platform-specific behavior:
 - NGA: can fetch the linked thread page and generate a readable preview card.
   Current rendering supports main post, page-highlighted hot replies when
   present, basic metadata, NGA smiley images, and attachment images.
+- Bilibili: extracts the BV id from the shared URL, calls the public video view
+  endpoint, and renders the full title, UP name, description, cover, and
+  clickable video URL. It does not require Bilibili login credentials.
 - Miyoushe: rewrites mobile article links whose article id is stored in the
   `#/article/<id>` fragment into PC article links such as
   `https://www.miyoushe.com/ys/article/<id>`.

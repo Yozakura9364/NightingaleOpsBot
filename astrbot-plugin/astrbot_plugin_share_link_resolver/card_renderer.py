@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import io
+import logging
 import re
 import unicodedata
 from dataclasses import dataclass
@@ -11,6 +12,8 @@ from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
 from PIL import Image, ImageDraw, ImageFont, ImageOps
+
+logger = logging.getLogger(__name__)
 
 
 RESAMPLE_LANCZOS = getattr(getattr(Image, "Resampling", Image), "LANCZOS", Image.LANCZOS)
@@ -279,7 +282,7 @@ def _render_nga_thread(content: CardContent, output_path: Path, *, width: int, m
     card_gap = 14  # between cards (was 16)
     card_width = width - margin * 2
     content_width = card_width - padding * 2
-    reply_text_width = content_width - 60
+    reply_text_width = content_width
     fonts = {
         "source": _font(17),
         "title": _font(26, bold=True),
@@ -295,12 +298,12 @@ def _render_nga_thread(content: CardContent, output_path: Path, *, width: int, m
     reply_posts = posts[1:]
     reply_section_title = "热门回复" if any(post.kind == "hot" for post in reply_posts) else "回复预览"
     title_lines = _wrap_text(content.title or main_post.title or "NGA 主题", fonts["title"], content_width)
-    main_lines = _wrap_rich_text(main_post.body, fonts["body"], content_width, max_lines=18, tracking=NGA_BODY_TRACKING)
+    main_lines = _wrap_rich_text(_preprocess_nga_body(main_post.body), fonts["body"], content_width, tracking=NGA_BODY_TRACKING)
     main_smileys = [] if _has_nga_smiley_tokens(main_post.body) else _load_smiley_images(main_post.smiley_urls, limit=4)
     main_images = _load_post_images(main_post.image_urls, content_width, limit=2, max_image_height=380)
     reply_line_groups = [
         (
-            _wrap_rich_text(post.body, fonts["body"], reply_text_width, max_lines=6, tracking=NGA_BODY_TRACKING),
+            _wrap_rich_text(_preprocess_nga_body(post.body), fonts["body"], reply_text_width, tracking=NGA_BODY_TRACKING),
             post,
             [] if _has_nga_smiley_tokens(post.body) else _load_smiley_images(post.smiley_urls, limit=3),
             _load_post_images(post.image_urls, reply_text_width, limit=2, max_image_height=220),
@@ -349,16 +352,21 @@ def _render_nga_thread(content: CardContent, output_path: Path, *, width: int, m
     )
     y = main_card_bottom + card_gap
 
+    omitted_count = 0
     if reply_line_groups:
         _draw_text(image, draw, (margin, y), reply_section_title, fill=palette["accent"], font=fonts["section"])
         y += _line_height(fonts["section"]) + 8
         safe_limit = max_height - margin
+        drawn_count = 0
         for lines, post, smileys, post_images in reply_line_groups:
             card_h = _nga_reply_card_height(lines, smileys, post_images, fonts)
             if y + card_h > safe_limit:
-                # ponytail: don't draw a reply that would be clipped
-                # by max_height — keep only full cards.
+                # ponytail: max_height hard limit — don't draw a reply that
+                # would be clipped.  Surface the omission in the image, not
+                # only in the log, so viewers know content was skipped.
+                omitted_count = len(reply_line_groups) - drawn_count
                 break
+            drawn_count += 1
             y = _draw_nga_reply_card(
                 image,
                 draw,
@@ -371,6 +379,19 @@ def _render_nga_thread(content: CardContent, output_path: Path, *, width: int, m
                 palette,
                 padding,
             ) + card_gap
+
+    if omitted_count > 0:
+        logger.warning(
+            "NGA card max_height=%d reached — %d replies omitted",
+            max_height, omitted_count,
+        )
+        y += 4
+        _draw_text(
+            image, draw, (margin + 4, y),
+            f"…… 还有 {omitted_count} 条回复因卡片高度限制未显示",
+            fill=palette["muted"], font=fonts["small"],
+        )
+        y += _line_height(fonts["small"]) + 12
 
     # Crop to actual last content bottom (no clip, no excess gap)
     content_bottom = y - card_gap + margin
@@ -397,7 +418,7 @@ def _draw_nga_main_card(image, draw, box, content, post, title_lines, body_lines
     y += 6
     draw.line((x, y, right - padding, y), fill=palette["line"], width=1)
     y += 12
-    _draw_avatar(image, draw, post.avatar_url, (x, y), 54, palette, fallback=(post.author or "楼"))
+    _draw_nga_avatar(image, draw, post.avatar_url, (x, y), 54, palette, fallback=(post.author or "N"))
     author_x = x + 68
     _draw_text(image, draw, (author_x, y + 2), post.author or "楼主", fill=palette["accent"], font=fonts["author"])
     y += _line_height(fonts["author"]) + 4
@@ -436,7 +457,7 @@ def _redraw_nga_main_content(image, draw, box, content, post, title_lines, body_
     y += 6
     draw.line((x, y, right - padding, y), fill=palette["line"], width=1)
     y += 12
-    _draw_avatar(image, draw, post.avatar_url, (x, y), 54, palette, fallback=(post.author or "楼"))
+    _draw_nga_avatar(image, draw, post.avatar_url, (x, y), 54, palette, fallback=(post.author or "N"))
     author_x = x + 68
     _draw_text(image, draw, (author_x, y + 2), post.author or "楼主", fill=palette["accent"], font=fonts["author"])
     y += _line_height(fonts["author"]) + 4
@@ -472,7 +493,7 @@ def _draw_nga_reply_card(image, draw, box, post, body_lines, smileys, post_image
     height = _nga_reply_card_height(body_lines, smileys, post_images, fonts)
     bottom = top + height
     _rounded_rect(draw, (left, top, right, bottom), 6, palette["card"], palette["line"])
-    _draw_avatar(image, draw, post.avatar_url, (x, y), 46, palette, fallback=str(post.floor))
+    _draw_nga_avatar(image, draw, post.avatar_url, (x, y), 46, palette, fallback=str(post.floor))
     author_x = x + 60
     _draw_text(image, draw, (author_x, y), post.author or f"{post.floor} 楼", fill=palette["accent"], font=fonts["author"])
     y += _line_height(fonts["author"]) + 4
@@ -537,7 +558,35 @@ def _has_nga_smiley_tokens(text: str) -> bool:
     return bool(NGA_SMILEY_TOKEN_RE.search(str(text or "")))
 
 
-def _wrap_rich_text(text: str, font, max_width: int, *, max_lines: int, tracking: int = TEXT_TRACKING) -> list[list[tuple[str, str]]]:
+
+def _preprocess_nga_body(text: str) -> str:
+    """Convert NGA BBCode to renderable text: quote blocks → \x01 markers,
+    strip leftover formatting tags ([b], [pid], ...).  Called on every NGA
+    body before wrapping so both web_card-parsed and direct-fixture bodies
+    are cleaned the same way."""
+    import re as _re2
+    value = str(text or "")
+
+    def _mark_quote(match):
+        inner = match.group(1)
+        return "\n".join(
+            "\x01" + line for line in inner.splitlines() if line.strip()
+        )
+
+    value = _re2.sub(
+        r"\[quote(?:=[^\]]*)?\](.*?)\[/quote\]",
+        _mark_quote,
+        value,
+        flags=_re2.IGNORECASE | _re2.DOTALL,
+    )
+    value = _re2.sub(r"\[/?quote(?:=[^\]]*)?\]", "\n", value, flags=_re2.IGNORECASE)
+    # strip remaining BBCode tags: [b][/b][pid=..][img].. etc.
+    value = _re2.sub(r"\[img\].*?\[/img\]", "", value, flags=_re2.IGNORECASE | _re2.DOTALL)
+    value = _re2.sub(r"\[url(?:=[^\]]+)?\](.*?)\[/url\]", r"\1", value, flags=_re2.IGNORECASE | _re2.DOTALL)
+    value = _re2.sub(r"\[/?[a-z][a-z0-9_]*[^\]]*\]", "", value, flags=_re2.IGNORECASE)
+    value = _re2.sub(r"\s*\n\s*", "\n", value)
+    return value.strip()
+def _wrap_rich_text(text: str, font, max_width: int, *, max_lines: int | None = None, tracking: int = TEXT_TRACKING) -> list[list[tuple[str, str]]]:
     draw = ImageDraw.Draw(Image.new("RGB", (10, 10)))
     lines: list[list[tuple[str, str]]] = []
     paragraphs = str(text or "").replace("\r\n", "\n").replace("\r", "\n").split("\n")
@@ -546,7 +595,7 @@ def _wrap_rich_text(text: str, font, max_width: int, *, max_lines: int, tracking
         if not paragraph:
             if lines and lines[-1]:
                 lines.append([])
-            if len(lines) >= max_lines:
+            if max_lines is not None and len(lines) >= max_lines:
                 return lines[:max_lines]
             continue
         current: list[tuple[str, str]] = []
@@ -555,7 +604,7 @@ def _wrap_rich_text(text: str, font, max_width: int, *, max_lines: int, tracking
             unit_width = _rich_unit_width(draw, unit, font, tracking=tracking)
             if current and current_width + unit_width > max_width:
                 lines.append(current)
-                if len(lines) >= max_lines:
+                if max_lines is not None and len(lines) >= max_lines:
                     return lines[:max_lines]
                 current = [unit]
                 current_width = unit_width
@@ -564,11 +613,13 @@ def _wrap_rich_text(text: str, font, max_width: int, *, max_lines: int, tracking
                 current_width += unit_width
         if current:
             lines.append(current)
-            if len(lines) >= max_lines:
+            if max_lines is not None and len(lines) >= max_lines:
                 return lines[:max_lines]
     while lines and not lines[-1]:
         lines.pop()
-    return lines[:max_lines]
+    if max_lines is not None:
+        lines = lines[:max_lines]
+    return lines
 
 
 def _iter_rich_units(text: str):
@@ -608,11 +659,28 @@ def _rich_lines_height(lines: list[list[tuple[str, str]]], font, gap: int, *, pa
 
 def _draw_rich_lines(canvas: Image.Image, draw: ImageDraw.ImageDraw, x: int, y: int, lines: list[list[tuple[str, str]]], *, fill, font, gap: int, tracking: int = TEXT_TRACKING, para_min: int = 8) -> int:
     line_height = max(_line_height(font), _nga_inline_smiley_size(font))
+    quote_bar_color = (150, 158, 168)
+    quote_indent = 8
+    quote_bar_width = 3
     for line in lines:
         if not line:
             y += max(para_min, _line_height(font) // 2) + gap
             continue
-        cursor = x
+        # Detect \x01 quote marker
+        is_quote = False
+        if line and line[0][0] == "text" and line[0][1].startswith("\x01"):
+            is_quote = True
+            # strip the marker from the first unit
+            line = [(line[0][0], line[0][1][1:])] + line[1:]
+            if not line[0][1]:
+                line = line[1:]
+            if not line:
+                y += max(para_min, _line_height(font) // 2) + gap
+                continue
+
+        quote_bar_x = x - 4 if is_quote else x
+        cursor = x + (quote_indent if is_quote else 0)
+
         for unit in line:
             kind, value = unit
             if kind == "image":
@@ -626,8 +694,16 @@ def _draw_rich_lines(canvas: Image.Image, draw: ImageDraw.ImageDraw, x: int, y: 
                 _draw_text(canvas, draw, (cursor, y), fallback, fill=fill, font=font, tracking=tracking)
                 cursor += _text_width(draw, fallback, font, tracking=tracking)
                 continue
-            _draw_text(canvas, draw, (cursor, y), value, fill=fill, font=font, tracking=tracking)
+            text_fill = (quote_bar_color if is_quote else fill)
+            _draw_text(canvas, draw, (cursor, y), value, fill=text_fill, font=font, tracking=tracking)
             cursor += _text_width(draw, value, font, tracking=tracking)
+
+        # Draw quote left bar
+        if is_quote:
+            draw.rectangle(
+                (quote_bar_x, y, quote_bar_x + quote_bar_width, y + line_height),
+                fill=quote_bar_color,
+            )
         y += line_height + gap
     return y
 
@@ -680,6 +756,66 @@ def _draw_avatar(canvas: Image.Image, draw: ImageDraw.ImageDraw, url: str, xy: t
     text_w = _text_width(draw, letter, font)
     text_h = _line_height(font)
     draw.text((x + (size - text_w) / 2, y + (size - text_h) / 2 - 1), letter, fill=palette["muted"], font=font)
+
+
+def _draw_nga_avatar(canvas, draw, avatar_url, xy, size, palette, fallback=""):
+    x, y = xy
+    """NGA avatar: load real image, else draw diver helmet icon."""
+    avatar = _load_square_image(avatar_url, size)
+    if avatar:
+        canvas.paste(avatar, (x, y), _circle_mask(size))
+        return
+    _draw_nga_diver_icon(canvas, draw, x, y, size, palette)
+
+
+def _draw_nga_diver_icon(
+    canvas: Image.Image, draw: ImageDraw.ImageDraw,
+    ox: int, oy: int, size: int, palette,
+) -> None:
+    """Draw a simple diver-helmet icon — NGA default avatar style."""
+    line_color = palette.get("line", (180, 180, 190))
+    bg = (241, 235, 224) if _is_light_bg(palette) else (55, 55, 65)
+    helmet = (55, 60, 72) if _is_light_bg(palette) else (180, 185, 195)
+    visor = (99, 217, 220)
+
+    # Circle background
+    draw.ellipse((ox, oy, ox + size, oy + size), fill=bg, outline=line_color, width=1)
+
+    # Helmet dome
+    hs = max(4, size // 12)
+    pad = max(6, size // 8)
+    helmet_top = oy + pad
+    helmet_bottom = oy + size - pad * 2
+    helmet_left = ox + pad
+    helmet_right = ox + size - pad
+    draw.ellipse(
+        (helmet_left, helmet_top, helmet_right, helmet_bottom),
+        fill=helmet,
+    )
+
+    # Visor
+    visor_h = max(3, size // 16)
+    visor_y = oy + size // 2 - visor_h // 2
+    visor_margin = max(5, size // 10)
+    draw.rectangle(
+        (ox + visor_margin, visor_y, ox + size - visor_margin, visor_y + visor_h),
+        fill=visor,
+    )
+
+    # Two tiny rivets
+    rivet_r = max(1, size // 26)
+    for rivet_x in (ox + size // 4, ox + 3 * size // 4):
+        draw.ellipse(
+            (rivet_x - rivet_r, helmet_top, rivet_x + rivet_r, helmet_top + rivet_r * 2),
+            fill=visor,
+        )
+
+
+def _is_light_bg(palette) -> bool:
+    bg = palette.get("bg", (255, 255, 255))
+    if isinstance(bg, (tuple, list)) and len(bg) >= 3:
+        return (bg[0] + bg[1] + bg[2]) / 3 > 127
+    return True
 
 
 def _circle_mask(size: int) -> Image.Image:
