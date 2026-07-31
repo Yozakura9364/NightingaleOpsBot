@@ -12,6 +12,8 @@ NightingaleOpsBot 是夜莺不语相关服务的私有 QQ Bot 和运维自动化
 - `astrbot-plugin/astrbot_plugin_deadline_reminder/`：日程和 deadline 每日提醒插件。
 - `astrbot-plugin/astrbot_plugin_github_watch/`：GitHub 仓库更新推送和 preset 订阅插件。
 - `astrbot-plugin/astrbot_plugin_github_cards/`：GitHub 链接卡片、issue/PR/readme 查询插件。
+- `astrbot-plugin/astrbot_plugin_huijiwiki/`：FF14 灰机 Wiki 物品页面查询插件。
+- `astrbot-plugin/astrbot_plugin_short_links/`：仅限所有者私聊使用的私人短链管理插件。
 - `astrbot-plugin/astrbot_plugin_share_link_resolver/`：QQ 手机分享卡片原始链接解析插件。
 - `scripts/`：本机安装、隧道和计划任务辅助脚本。
 
@@ -138,6 +140,17 @@ NightingaleSilence NS Ops Runner
 /ns armoire sync-catalog
 /ns confirm <验证码>
 ```
+
+### FF14 灰机 Wiki 物品查询
+
+查询物品对应的 FF14 灰机 Wiki 页面：
+
+```text
+/item 物品名
+/ff14item 物品名
+```
+
+`/ff14item` 是 `/item` 的兼容命令，两个命令返回相同的物品页面链接。
 
 ## 安全说明
 
@@ -334,6 +347,7 @@ X 图片 URL -> 代理下载 -> 本地图片文件 -> QQ 图片
 /ddl 帮助
 /ddl 添加 国服活动 2026-08-01 23:59 活动名称
 /ddl 添加 国际服活动 2026-08-01 活动名称
+/ddl 添加 国服活动 2026-08-01 23:59 活动名称 https://example.com/article
 /ddl 列表
 /ddl 今日
 /ddl 删除 3
@@ -343,6 +357,7 @@ X 图片 URL -> 代理下载 -> 本地图片文件 -> QQ 图片
 /ddl 开
 /ddl 广播加入
 /ddl 广播添加 国服活动 2026-08-01 23:59 活动名称
+/ddl 广播添加 国服活动 2026-08-01 23:59 活动名称 https://example.com/article
 /ddl 广播列表
 /ddl 广播今日
 /ddl 广播删除 3
@@ -356,9 +371,9 @@ X 图片 URL -> 代理下载 -> 本地图片文件 -> QQ 图片
 日程提醒
 
 国服活动：
-#1 xxx的xx
-结束时间：2026-08-01 23:59
-距离结束还有 12天3小时
+1. xxx的xx
+2026-08-01 23:59（剩余12天3小时）
+原文：https://example.com/article
 ```
 
 范围和存储：
@@ -369,6 +384,30 @@ X 图片 URL -> 代理下载 -> 本地图片文件 -> QQ 图片
 - 广播日程通过 `/ddl 广播添加 ...` 管理，并推送给所有已加入广播的群。
 - 日程保存在 `astrbot_plugin_deadline_reminder/.local/`。
 - 当前聊天执行 `/ddl 关` 不会删除已有日程。
+- 添加时可附加原文链接（可选，仅支持 http/https，须放在命令末尾）。有链接的日程在推送和列表中会显示 `原文：`。
+
+### 私人短链
+
+私人短链插件通过服务器内部 API 管理 `https://nightingalesilence.com/go/<短码>`。管理命令只允许配置中的站点所有者 QQ 号在私聊中执行；群聊、其他账号和仅具有 AstrBot 管理员身份的账号均不能使用。
+
+常用命令：
+
+```text
+/短链 https://目标地址
+/短链 自定义 card https://目标地址
+/短链 列表
+/短链 修改 card https://新地址
+/短链 停用 card
+/短链 启用 card
+/短链 删除 card
+```
+
+配置边界：
+
+- `service_endpoint` 使用 Docker 内部地址，默认 `http://host.docker.internal:18768`。
+- `api_token` 必须与短链服务 systemd credential 一致，不得在聊天或文档中输出。
+- `owner_user_ids` 必须明确填写；留空时插件拒绝所有管理命令。
+- 公网 Nginx 只开放 `/go/`，绝不能反向代理 `/internal/short-links`。
 
 ### GitHub Watch
 

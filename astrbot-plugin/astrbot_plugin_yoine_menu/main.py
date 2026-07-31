@@ -7,7 +7,7 @@ from astrbot.api.star import Context, Star, register
 PUBLIC_INDEX = """Yoine 菜单
 
 /yoine 签到  账号绑定、签到类
-/yoine 推送  日程、GitHub、B站、X、链接转图
+/yoine 推送  日程、FF14查询、GitHub、B站、X、链接转图
 /yoine 全部  分段发送全部公开菜单
 
 账号凭证请私聊操作；群里不会接收 cookie、token、扫码登录凭证。
@@ -62,6 +62,10 @@ FF14 官方更新提醒
 /ff14watch 源 jp-news off
 /ff14watch 关
 
+FF14 灰机 Wiki 物品查询
+/item 物品名
+别名：/ff14item
+
 GitHub 仓库更新提醒
 /ghwatch 帮助
 /ghwatch preset
@@ -84,6 +88,15 @@ GitHub 链接卡片
 /ghpr owner/repo#123
 /ghreadme owner/repo
 /ghlimit
+
+微博动态订阅
+/微博帮助
+/微博订阅 UID
+/微博取消订阅 UID
+/微博订阅列表
+/微博推送测试 UID
+/微博推送开
+/微博推送关
 
 X 推送
 /x帮助
