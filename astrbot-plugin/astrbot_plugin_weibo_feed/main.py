@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import html
 from hashlib import sha256
+import json
 from pathlib import Path
+import re
 from urllib.error import URLError
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 from urllib.request import ProxyHandler, Request, build_opener
 
 from astrbot.api import AstrBotConfig, logger
@@ -13,7 +16,21 @@ import astrbot.api.message_components as Comp
 from astrbot.api.star import Context, Star, register
 
 from .feed_client import FeedItem, fetch_user_feed, normalize_uid
+from .html_card_renderer import render_weibo_card_html
+from .post_client import fetch_weibo_post, is_weibo_url
 from .storage import Subscription, WeiboFeedStore
+
+
+_URL_RE = re.compile(r"https?://[^\s<>'\"`，。！？、；：）)\]}]+", re.I)
+_WEIBO_COMMANDS = (
+    "微博帮助",
+    "微博订阅",
+    "微博取消订阅",
+    "微博订阅列表",
+    "微博推送测试",
+    "微博推送开",
+    "微博推送关",
+)
 
 
 def _split_ids(value) -> set[str]:
@@ -39,8 +56,97 @@ def _event_origin(event: AstrMessageEvent) -> str:
     return str(getattr(event, "unified_msg_origin", "") or "")
 
 
+def _origin_is_group(origin: str) -> bool:
+    value = str(origin or "").lower()
+    return value.startswith("group:") or ":groupmessage:" in value
+
+
 def _target_kind(event: AstrMessageEvent) -> str:
     return "group" if _event_group_id(event) else "private"
+
+
+def _message_components(event: AstrMessageEvent) -> list[object]:
+    message_obj = getattr(event, "message_obj", None)
+    message = getattr(message_obj, "message", None)
+    if isinstance(message, list):
+        return message
+    if message is not None:
+        try:
+            return list(message)
+        except TypeError:
+            pass
+    return []
+
+
+def _json_payloads(event: AstrMessageEvent) -> list[object]:
+    payloads: list[object] = []
+    for component in _message_components(event):
+        type_value = getattr(component, "type", "")
+        type_name = str(getattr(type_value, "value", type_value) or component.__class__.__name__).lower()
+        if type_name != "json" and component.__class__.__name__.lower() != "json":
+            continue
+        data = getattr(component, "data", None)
+        if data is not None:
+            payloads.append(data)
+    return payloads
+
+
+def _iter_text_values(value: object):
+    if isinstance(value, dict):
+        for child in value.values():
+            yield from _iter_text_values(child)
+        return
+    if isinstance(value, (list, tuple)):
+        for child in value:
+            yield from _iter_text_values(child)
+        return
+    if not isinstance(value, str):
+        return
+
+    yield value
+    nested = value.strip()
+    if nested.startswith(("{", "[")):
+        try:
+            yield from _iter_text_values(json.loads(nested))
+        except (TypeError, ValueError, json.JSONDecodeError):
+            pass
+
+
+def _normalize_url(value: str) -> str:
+    url = html.unescape(str(value or "")).replace("\\/", "/").strip()
+    for _ in range(2):
+        decoded = unquote(url)
+        if decoded == url:
+            break
+        url = decoded
+    return url.rstrip(".,;:!?，。！？、；：)]}）")
+
+
+def _extract_weibo_links(event: AstrMessageEvent) -> list[str]:
+    values: list[object] = _json_payloads(event)
+    if event.message_str:
+        values.append(event.message_str)
+
+    links: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        for text in _iter_text_values(value):
+            normalized_text = html.unescape(text).replace("\\/", "/")
+            for match in _URL_RE.finditer(normalized_text):
+                url = _normalize_url(match.group(0))
+                key = url.lower()
+                if is_weibo_url(url) and key not in seen:
+                    seen.add(key)
+                    links.append(url)
+    return links
+
+
+def _is_weibo_command(text: str) -> bool:
+    value = str(text or "").strip()
+    if value.startswith("/"):
+        value = value[1:].lstrip()
+    command = value.split(maxsplit=1)[0] if value else ""
+    return command in _WEIBO_COMMANDS
 
 
 def _command_argument(text: str, commands: tuple[str, ...]) -> str:
@@ -90,7 +196,9 @@ class WeiboFeedPlugin(Star):
         self.data_dir = Path(__file__).resolve().parent / ".local"
         self.store = WeiboFeedStore(self.data_dir)
         self.image_dir = self.data_dir / "images"
+        self.card_dir = self.data_dir / "cards"
         self.image_dir.mkdir(parents=True, exist_ok=True)
+        self.card_dir.mkdir(parents=True, exist_ok=True)
         self.max_output_chars = int(self.config.get("max_output_chars", 1800) or 1800)
         self._poll_task: asyncio.Task | None = None
         self._poll_lock = asyncio.Lock()
@@ -111,6 +219,15 @@ class WeiboFeedPlugin(Star):
     def _base_url(self) -> str:
         return str(self.config.get("weibo_rss_base_url", "http://docker-weibo-rss:3000") or "http://docker-weibo-rss:3000").rstrip("/")
 
+    def _resolve_shared_posts(self) -> bool:
+        return bool(self.config.get("resolve_shared_posts", True))
+
+    def _post_fetch_timeout_seconds(self) -> int:
+        return max(5, int(self.config.get("post_fetch_timeout_seconds", 15) or 15))
+
+    def _post_api_proxy_url(self) -> str:
+        return str(self.config.get("post_api_proxy_url", "") or "").strip()
+
     def _poll_interval_seconds(self) -> int:
         minutes = int(self.config.get("poll_interval_minutes", 10) or 10)
         return max(5, minutes) * 60
@@ -123,6 +240,27 @@ class WeiboFeedPlugin(Star):
 
     def _include_images(self) -> bool:
         return bool(self.config.get("include_images", False))
+
+    def _render_card_image(self) -> bool:
+        return bool(self.config.get("render_card_image", True))
+
+    def _card_width(self) -> int:
+        return max(640, int(self.config.get("card_width", 860) or 860))
+
+    def _card_max_height(self) -> int:
+        return max(1200, int(self.config.get("card_max_height", 2800) or 2800))
+
+    def _brand_name(self) -> str:
+        return str(self.config.get("card_brand_name", "Yoine❤") or "Yoine❤").strip() or "Yoine❤"
+
+    def _brand_avatar_url(self) -> str:
+        return str(
+            self.config.get(
+                "card_brand_avatar_url",
+                "https://q1.qlogo.cn/g?b=qq&nk=1756507015&s=640",
+            )
+            or ""
+        ).strip()
 
     def _group_use_forward(self) -> bool:
         return bool(self.config.get("group_use_forward", True))
@@ -155,27 +293,34 @@ class WeiboFeedPlugin(Star):
     async def _fetch_feed(self, uid: str) -> list[FeedItem]:
         return await asyncio.to_thread(fetch_user_feed, self._base_url(), uid)
 
+    async def _fetch_shared_post(self, url: str) -> tuple[str, FeedItem]:
+        return await asyncio.to_thread(
+            fetch_weibo_post,
+            url,
+            timeout=self._post_fetch_timeout_seconds(),
+            proxy_url=self._post_api_proxy_url(),
+        )
+
     async def _send_to_origin(self, origin: str, text: str) -> None:
         if not origin:
             return
         await self.context.send_message(origin, MessageChain([Comp.Plain(_clamp(text, self.max_output_chars))]))
 
     async def _send_item_to_origin(self, origin: str, uid: str, item: FeedItem) -> None:
-        if self._group_use_forward() and await self._send_item_forward_to_origin(origin, uid, item):
+        card_path = await self._render_item_card_path(item) if self._render_card_image() else ""
+        if _origin_is_group(origin) and self._group_use_forward():
+            node = await self._build_forward_node(uid, item, card_path=card_path)
+            if node is not None:
+                await self.context.send_message(origin, MessageChain([Comp.Nodes([node])]))
+                return
+        if card_path:
+            await self.context.send_message(origin, MessageChain([Comp.Image.fromFileSystem(card_path)]))
+            if item.link:
+                await self.context.send_message(origin, MessageChain([Comp.Plain(item.link)]))
+            await self._send_item_images_to_origin(origin, item)
             return
         await self._send_to_origin(origin, self._format_item(uid, item))
         await self._send_item_images_to_origin(origin, item)
-
-    async def _send_item_forward_to_origin(self, origin: str, uid: str, item: FeedItem) -> bool:
-        if not origin or not self._group_use_forward():
-            return False
-        if not origin.startswith("group:"):
-            return False
-        node = await self._build_forward_node(uid, item)
-        if node is None:
-            return False
-        await self.context.send_message(origin, MessageChain([Comp.Nodes([node])]))
-        return True
 
     async def _send_item_images_to_origin(self, origin: str, item: FeedItem) -> None:
         if not origin or not self._include_images():
@@ -190,8 +335,20 @@ class WeiboFeedPlugin(Star):
             except Exception as error:
                 logger.warning("Weibo feed image send failed for %s: %s", item.link, error)
 
-    async def _build_forward_node(self, uid: str, item: FeedItem) -> Comp.Node | None:
-        content: list[Comp.BaseMessageComponent] = [Comp.Plain(self._format_item(uid, item))]
+    async def _build_forward_node(
+        self,
+        uid: str,
+        item: FeedItem,
+        *,
+        card_path: str = "",
+    ) -> Comp.Node | None:
+        content: list[Comp.BaseMessageComponent] = []
+        if card_path:
+            content.append(Comp.Image.fromFileSystem(card_path))
+            if item.link:
+                content.append(Comp.Plain(item.link))
+        else:
+            content.append(Comp.Plain(self._format_item(uid, item)))
         if self._include_images():
             for image_url in item.image_urls[: self._max_images_per_post()]:
                 try:
@@ -208,14 +365,23 @@ class WeiboFeedPlugin(Star):
         )
 
     async def _send_item_to_event(self, event: AstrMessageEvent, uid: str, item: FeedItem, prefix: str = "") -> None:
+        card_path = await self._render_item_card_path(item) if self._render_card_image() else ""
         group_id = _event_group_id(event)
         if group_id and self._group_use_forward():
-            node = await self._build_forward_node(uid, item)
+            node = await self._build_forward_node(uid, item, card_path=card_path)
             if node is not None:
                 if prefix:
                     await event.send(MessageChain([Comp.Plain(_clamp(prefix, self.max_output_chars))]))
                 await event.send(MessageChain([Comp.Nodes([node])]))
                 return
+        if card_path:
+            if prefix:
+                await event.send(MessageChain([Comp.Plain(_clamp(prefix, self.max_output_chars))]))
+            await event.send(MessageChain([Comp.Image.fromFileSystem(card_path)]))
+            if item.link:
+                await event.send(MessageChain([Comp.Plain(item.link)]))
+            await self._send_item_images_to_event(event, item)
+            return
         text = (prefix + "\n" if prefix else "") + self._format_item(uid, item)
         if self._include_images() and item.image_urls:
             await event.send(MessageChain([Comp.Plain(_clamp(text, self.max_output_chars))]))
@@ -235,6 +401,45 @@ class WeiboFeedPlugin(Star):
 
     async def _download_image(self, image_url: str) -> str:
         return await asyncio.to_thread(self._download_image_sync, image_url)
+
+    async def _render_item_card_path(self, item: FeedItem) -> str:
+        if not self._render_card_image():
+            return ""
+        image_paths: list[str] = []
+        for image_url in item.image_urls[: self._max_images_per_post()]:
+            try:
+                image_paths.append(await self._download_image(image_url))
+            except Exception as error:
+                logger.warning("Weibo feed card image download failed for %s: %s", item.link, error)
+
+        author_avatar_path = ""
+        if item.author_avatar_url:
+            try:
+                author_avatar_path = await self._download_image(item.author_avatar_url)
+            except Exception as error:
+                logger.warning("Weibo feed author avatar download failed for %s: %s", item.link, error)
+
+        brand_avatar_path = ""
+        if self._brand_avatar_url():
+            try:
+                brand_avatar_path = await self._download_image(self._brand_avatar_url())
+            except Exception as error:
+                logger.warning("Weibo feed card brand avatar download failed: %s", error)
+        try:
+            return await render_weibo_card_html(
+                self,
+                item,
+                self.card_dir,
+                image_paths=image_paths,
+                author_avatar_path=author_avatar_path,
+                brand_avatar_path=brand_avatar_path,
+                brand_name=self._brand_name(),
+                width=self._card_width(),
+                max_height=self._card_max_height(),
+            )
+        except Exception as error:
+            logger.warning("Weibo feed HTML card render failed for %s: %s", item.link, error)
+            return ""
 
     def _download_image_sync(self, image_url: str) -> str:
         parsed = urlparse(image_url)
@@ -368,6 +573,22 @@ class WeiboFeedPlugin(Star):
             lines.append(item.link)
         return _clamp("\n".join(lines), self.max_output_chars)
 
+    @filter.event_message_type(filter.EventMessageType.ALL, priority=10)
+    async def resolve_weibo_share(self, event: AstrMessageEvent):
+        if not self._resolve_shared_posts() or _is_weibo_command(event.message_str or ""):
+            return
+
+        links = _extract_weibo_links(event)
+        if not links:
+            return
+
+        event.stop_event()
+        try:
+            post_id, item = await self._fetch_shared_post(links[0])
+            await self._send_item_to_event(event, post_id, item)
+        except Exception as error:
+            logger.info("Weibo shared post resolve failed for %s: %s", links[0], error)
+
     @filter.command("微博帮助")
     async def weibo_help(self, event: AstrMessageEvent):
         yield event.plain_result(_help_text())
@@ -419,13 +640,13 @@ class WeiboFeedPlugin(Star):
                     published_at=item.published_at,
                 )
         text = _clamp("\n\n".join(lines), self.max_output_chars)
-        if latest and (_event_group_id(event) and self._group_use_forward()):
+        if latest and (
+            self._render_card_image()
+            or (_event_group_id(event) and self._group_use_forward())
+            or (self._include_images() and latest.image_urls)
+        ):
             await event.send(MessageChain([Comp.Plain(text)]))
             await self._send_item_to_event(event, subscription.uid, latest)
-            return
-        if latest and self._include_images() and latest.image_urls:
-            await event.send(MessageChain([Comp.Plain(text)]))
-            await self._send_item_images_to_event(event, latest)
             return
         yield event.plain_result(text)
 

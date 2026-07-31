@@ -1,4 +1,21 @@
 {
+  "resolve_shared_posts": {
+    "description": "解析聊天中的微博链接和 QQ 微博卡片",
+    "type": "bool",
+    "default": true,
+    "hint": "识别后沿用微博订阅的卡片、原链接和原图发送格式；解析失败时静默。"
+  },
+  "post_fetch_timeout_seconds": {
+    "description": "单条微博解析超时秒数",
+    "type": "int",
+    "default": 15
+  },
+  "post_api_proxy_url": {
+    "description": "单条微博接口代理",
+    "type": "string",
+    "default": "",
+    "hint": "通常留空；微博公开接口访问受限时可单独配置 HTTP 代理。"
+  },
   "weibo_rss_base_url": {
     "description": "weibo-rss 基础地址",
     "type": "string",
@@ -32,11 +49,38 @@
     "default": false,
     "hint": "默认关闭，先以稳定文字推送为主。开启后会下载图片再发送。"
   },
+  "render_card_image": {
+    "description": "优先生成微博动态卡片图",
+    "type": "bool",
+    "default": true,
+    "hint": "开启后群聊合并发送卡片、原微博链接和原图；私聊依次发送，渲染失败时回退到文本和原图。"
+  },
+  "card_width": {
+    "description": "微博卡片图宽度",
+    "type": "int",
+    "default": 860
+  },
+  "card_max_height": {
+    "description": "微博卡片图最大高度",
+    "type": "int",
+    "default": 2800
+  },
+  "card_brand_name": {
+    "description": "微博卡片底部品牌名称",
+    "type": "string",
+    "default": "Yoine❤"
+  },
+  "card_brand_avatar_url": {
+    "description": "微博卡片底部品牌头像地址",
+    "type": "string",
+    "default": "https://q1.qlogo.cn/g?b=qq&nk=1756507015&s=640",
+    "hint": "默认使用 QQ 机器人头像，可改成其他公开图片 URL。"
+  },
   "group_use_forward": {
     "description": "群聊使用合并转发",
     "type": "bool",
     "default": true,
-    "hint": "开启后，群聊中的微博测试和后台推送会优先合并成一条转发消息，减少刷屏。"
+    "hint": "开启后，群聊中的微博测试和后台推送会把卡片、原链接和原图合并成一条转发消息。"
   },
   "forward_display_name": {
     "description": "合并转发显示名",
@@ -52,7 +96,7 @@
   "max_images_per_post": {
     "description": "每条更新最多发送图片数",
     "type": "int",
-    "default": 3
+    "default": 18
   },
   "image_proxy_url": {
     "description": "图片下载代理",

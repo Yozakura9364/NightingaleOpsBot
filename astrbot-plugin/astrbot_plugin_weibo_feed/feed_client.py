@@ -20,6 +20,7 @@ class FeedItem:
     published_at: str
     summary: str
     author_name: str
+    author_avatar_url: str
     image_urls: list[str]
 
 
@@ -98,6 +99,7 @@ def _parse_rss_items(root: ET.Element) -> list[FeedItem]:
     channel = _first_child(root, "channel")
     source: Iterable[ET.Element] = channel if channel is not None else root
     author_name = _clean_text(_child_text(channel, "title")) if channel is not None else ""
+    author_name = re.sub(r"\s*的微博\s*$", "", author_name)
     items: list[FeedItem] = []
     for item in source:
         if _local_name(item.tag) != "item":
@@ -107,7 +109,11 @@ def _parse_rss_items(root: ET.Element) -> list[FeedItem]:
         guid = _clean_text(_child_text(item, "guid"))
         published = _format_datetime(_child_text(item, "pubDate") or _child_text(item, "updated"))
         raw_summary = _child_text(item, "description") or _child_text(item, "content")
-        summary = _clean_text(raw_summary)
+        summary = _clean_summary(raw_summary)
+        title, summary = _split_summary_title(title, summary)
+        author_avatar_url = _normalize_image_url(
+            _child_text(item, "weibo_avatar") or _child_text(channel, "weibo_avatar")
+        )
         item_id = guid or link or title
         if item_id:
             items.append(
@@ -118,6 +124,7 @@ def _parse_rss_items(root: ET.Element) -> list[FeedItem]:
                     published_at=published,
                     summary=summary,
                     author_name=author_name,
+                    author_avatar_url=author_avatar_url,
                     image_urls=_dedupe(_extract_image_urls(raw_summary) + _element_image_urls(item)),
                 )
             )
@@ -199,6 +206,40 @@ def _clean_text(value: str) -> str:
     text = unescape(str(value or ""))
     text = _TAG_RE.sub(" ", text)
     return _SPACE_RE.sub(" ", text).strip()
+
+
+_BLOCK_END_RE = re.compile(r"<\s*/\s*(?:p|div|li|blockquote|h[1-6]|tr)\s*>", re.I)
+_BREAK_RE = re.compile(r"<\s*br\s*/?\s*>", re.I)
+
+
+def _clean_summary(value: str) -> str:
+    text = unescape(str(value or ""))
+    text = _BREAK_RE.sub("\n", text)
+    text = _BLOCK_END_RE.sub("\n", text)
+    text = _TAG_RE.sub("", text)
+    text = re.sub(r"[ \t\f\v]+", " ", text)
+    text = re.sub(r" *\n *", "\n", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
+
+
+def _split_summary_title(title: str, summary: str) -> tuple[str, str]:
+    current_title = str(title or "").strip()
+    body = str(summary or "").strip()
+    if not body:
+        return current_title, body
+
+    first_line, separator, remainder = body.partition("\n")
+    inferred_title = first_line.strip()
+    if not inferred_title:
+        return current_title, body
+
+    # weibo-rss truncates the RSS title, while the first body paragraph keeps it whole.
+    if not current_title or inferred_title.startswith(current_title.strip()) or len(inferred_title) > len(current_title):
+        current_title = inferred_title
+    if body.startswith(inferred_title):
+        body = remainder.lstrip() if separator else ""
+    return current_title, body
 
 
 def _format_datetime(value: str) -> str:

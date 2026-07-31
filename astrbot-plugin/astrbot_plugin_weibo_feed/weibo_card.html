@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width={{ card_width }}">
+<style>
+  {% if font_regular %}
+  @font-face {
+    font-family: "NightingaleSourceHan";
+    src: url("{{ font_regular }}") format("truetype");
+    font-weight: 400;
+    font-style: normal;
+  }
+  {% endif %}
+  * { box-sizing: border-box; }
+  html, body { width: {{ card_width }}px; margin: 0; padding: 0; background: #eef2f7; overflow-x: hidden; }
+  body { color: #182230; font-family: "NightingaleSourceHan", "Noto Sans CJK SC", "Microsoft YaHei", sans-serif; font-synthesis: weight; }
+  .card { width: {{ card_content_width }}px; margin: 24px; overflow: hidden; border: 1px solid #dce3ec; border-radius: 18px; background: #ffffff; box-shadow: 0 10px 28px rgba(29, 45, 68, .10); }
+  .header { display: flex; align-items: center; padding: 24px 28px 18px; background: #f7faff; border-bottom: 1px solid #e8edf4; }
+  .author-avatar, .author-mark { width: 64px; height: 64px; margin-right: 16px; border-radius: 50%; object-fit: cover; }
+  .author-mark { display: flex; align-items: center; justify-content: center; background: #e6162d; color: #ffffff; font-size: 28px; font-weight: 700; }
+  .author-meta { min-width: 0; }
+  .author-name { overflow: hidden; color: #142338; font-size: 25px; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
+  .author-time { margin-top: 6px; color: #8090a4; font-size: 16px; }
+  .content { padding: 26px 28px 22px; }
+  .title { margin-bottom: 14px; color: #15243a; font-size: 28px; font-weight: 700; line-height: 1.4; overflow-wrap: anywhere; }
+  .summary { color: #34445a; font-size: 21px; line-height: 1.65; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .image-gallery { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-top: 22px; }
+  .image-gallery.single { display: block; }
+  .post-image { display: block; width: 100%; aspect-ratio: 1.25; border-radius: 12px; background: #f0f3f7; object-fit: cover; }
+  .image-gallery.single .post-image { max-height: 760px; aspect-ratio: auto; object-fit: contain; }
+  .footer { display: flex; align-items: center; padding: 14px 28px 18px; color: #8290a2; font-size: 15px; }
+  .brand-avatar { width: 28px; height: 28px; margin-right: 9px; border-radius: 50%; object-fit: cover; }
+  .brand-name { font-weight: 600; }
+  .brand-link { margin-left: 10px; color: #9aa6b5; }
+</style>
+</head>
+<body>
+  <article class="card">
+    <header class="header">
+      {% if author_avatar %}<img class="author-avatar" src="{{ author_avatar }}" alt="author avatar">{% else %}<div class="author-mark">微</div>{% endif %}
+      <div class="author-meta">
+        <div class="author-name">{{ author_name | e }}</div>
+        {% if published_at %}<div class="author-time">{{ published_at | e }}</div>{% endif %}
+      </div>
+    </header>
+
+    <main class="content">
+      {% if title %}<div class="title">{{ title | e }}</div>{% endif %}
+      {% if summary and summary != title %}<div class="summary">{{ summary | e }}</div>{% endif %}
+      {% if images %}
+      <div class="image-gallery {% if images | length == 1 %}single{% endif %}">
+        {% for image in images %}<img class="post-image" src="{{ image }}" alt="weibo image">{% endfor %}
+      </div>
+      {% endif %}
+    </main>
+
+    <footer class="footer">
+      {% if brand_avatar %}<img class="brand-avatar" src="{{ brand_avatar }}" alt="brand avatar">{% endif %}
+      <span class="brand-name">{{ brand_name | e }}</span>
+      <span class="brand-link">Weibo feed</span>
+    </footer>
+  </article>
+</body>
+</html>
