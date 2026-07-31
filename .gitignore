@@ -1,6 +1,9 @@
 # local secrets and runtime state
 .local/
 *.local.json
+.codex/
+.codex-tmp/
+LOCAL_GIT_IDENTITIES.md
 
 # logs
 *.log
