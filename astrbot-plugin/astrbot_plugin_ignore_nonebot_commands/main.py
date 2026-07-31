@@ -36,6 +36,9 @@ class IgnoreNoneBotCommandsPlugin(Star):
         super().__init__(context)
         self.config = config
 
+    def _ignored_sender_ids(self) -> set[str]:
+        return _split_items(self.config.get("ignored_sender_ids", []))
+
     def _ignored_commands(self) -> set[str]:
         configured = _split_items(self.config.get("ignored_commands", ""))
         return configured or DEFAULT_IGNORED_COMMANDS
@@ -58,8 +61,17 @@ class IgnoreNoneBotCommandsPlugin(Star):
 
         return any(line.startswith(prefix) for prefix in self._ignored_prefixes())
 
-    @filter.event_message_type(filter.EventMessageType.ALL, priority=-100)
+    @filter.event_message_type(filter.EventMessageType.ALL, priority=100)
     async def ignore_nonebot_commands(self, event: AstrMessageEvent):
+        sender_id = str(event.get_sender_id()).strip()
+        if sender_id in self._ignored_sender_ids():
+            logger.info(
+                "Ignored message from blacklisted sender %s",
+                sender_id,
+            )
+            event.stop_event()
+            return
+
         if self._should_ignore(event.message_str or ""):
             logger.info(
                 "Ignored NoneBot command for sender %s: %s",

@@ -1,4 +1,10 @@
 {
+  "ignored_sender_ids": {
+    "description": "忽略发送者 QQ 号",
+    "type": "list",
+    "default": [],
+    "hint": "名单中的账号发出的所有消息都会在 AstrBot 全局入口被忽略，适合填写群内其他机器人的 QQ 号。"
+  },
   "ignored_commands": {
     "description": "Exact command words reserved for NoneBot",
     "type": "string",
