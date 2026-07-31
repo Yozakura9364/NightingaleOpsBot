@@ -4,15 +4,19 @@ from dataclasses import dataclass
 from datetime import datetime
 from email.utils import parsedate_to_datetime
 from hashlib import sha256
+from html.parser import HTMLParser
+from http.cookiejar import CookieJar
+import gzip
 import html
 import json
 import re
 import socket
 from typing import Any
 from urllib.error import HTTPError, URLError
-from urllib.parse import urljoin, urlparse
-from urllib.request import Request, build_opener
+from urllib.parse import urlencode, urljoin, urlparse
+from urllib.request import HTTPCookieProcessor, Request, build_opener
 import xml.etree.ElementTree as ET
+import zlib
 
 
 USER_AGENT = "Mozilla/5.0 NightingaleOpsBot-FFXIVWatch/0.1"
@@ -26,6 +30,7 @@ class SourceDefinition:
     region: str
     label: str
     url: str
+    baseline_version: int = 1
 
 
 @dataclass(frozen=True)
@@ -89,28 +94,40 @@ SOURCES: dict[str, SourceDefinition] = {
         kind="news",
         region="日服",
         label="Lodestone",
-        url="/ff14/global/jp/all",
+        url="https://lodestonenews.com/news/all?locale=jp",
+        baseline_version=2,
+    ),
+    "na-news": SourceDefinition(
+        id="na-news",
+        kind="news",
+        region="美服",
+        label="Lodestone",
+        url="https://lodestonenews.com/news/all?locale=na",
+        baseline_version=2,
     ),
     "cn-store": SourceDefinition(
         id="cn-store",
         kind="store",
         region="国服",
         label="盛趣商城",
-        url="https://qu.sdo.com/product-detail/0d527e640bd3ada51565",
+        url="https://qu.sdo.com/tools-shop?merchantId=1",
+        baseline_version=2,
     ),
     "tw-store": SourceDefinition(
         id="tw-store",
         kind="store",
         region="台服",
         label="水晶商城",
-        url="https://www.ffxiv.com.tw/web/store/product_detail.aspx?id=F0068_251120152555",
+        url="https://www.ffxiv.com.tw/web/store/index.aspx",
+        baseline_version=2,
     ),
     "jp-store": SourceDefinition(
         id="jp-store",
         kind="store",
         region="日服",
         label="Online Store",
-        url="https://store.finalfantasyxiv.com/ffxivstore/ja-jp/product/392",
+        url="https://store.finalfantasyxiv.com/ffxivstore/ja-jp/new",
+        baseline_version=2,
     ),
 }
 
@@ -131,12 +148,16 @@ def fetch_source(
     source = SOURCES.get(source_id)
     if not source:
         raise ValueError(f"未知数据源：{source_id}")
-    if source_id in {"cn-news", "cn-notice", "jp-news"}:
+    if source_id in {"cn-news", "cn-notice"}:
         return _fetch_rsshub_news(source, timeout_seconds, rsshub_base_url=rsshub_base_url)
+    if source_id in {"jp-news", "na-news"}:
+        return _fetch_lodestone_news(source, timeout_seconds)
     if source_id == "cn-store":
         return _fetch_cn_store(source, timeout_seconds)
-    if source_id in {"tw-store", "jp-store"}:
-        return _fetch_generic_product_page(source, timeout_seconds)
+    if source_id == "tw-store":
+        return _fetch_tw_store(source, timeout_seconds)
+    if source_id == "jp-store":
+        return _fetch_jp_store(source, timeout_seconds)
     raise ValueError(f"未实现的数据源：{source_id}")
 
 
@@ -174,6 +195,52 @@ def _fetch_rsshub_news(
             )
         )
     return _dedupe_items(items)
+
+
+def _fetch_lodestone_news(source: SourceDefinition, timeout_seconds: int) -> list[WatchItem]:
+    payload = json.loads(_http_get(source.url, timeout_seconds=timeout_seconds))
+    items = _parse_lodestone_news(payload, source)
+    if not items:
+        raise RuntimeError("Lodestone News 没有返回新闻，已拒绝覆盖现有基线。")
+    return items
+
+
+def _parse_lodestone_news(payload: dict[str, Any], source: SourceDefinition) -> list[WatchItem]:
+    rows: list[tuple[str, WatchItem]] = []
+    for group in payload.values() if isinstance(payload, dict) else []:
+        if not isinstance(group, list):
+            continue
+        for row in group:
+            if not isinstance(row, dict):
+                continue
+            title = _clean_text(str(row.get("title") or ""))
+            item_url = str(row.get("url") or "").strip()
+            item_id = str(row.get("id") or "").strip()
+            if not title or not item_url:
+                continue
+            if not item_id:
+                item_id = _lodestone_detail_id(item_url) or _hash_text(item_url)
+            published_at = _format_datetime(str(row.get("time") or ""))
+            rows.append(
+                (
+                    published_at,
+                    WatchItem(
+                        source_id=source.id,
+                        source_label=source.label,
+                        kind=source.kind,
+                        region=source.region,
+                        item_id=item_id,
+                        title=title,
+                        url=item_url,
+                        published_at=published_at,
+                        summary=_clean_summary_html(str(row.get("description") or ""))[:240],
+                        image=str(row.get("image") or "").strip(),
+                    ),
+                )
+            )
+
+    rows.sort(key=lambda row: row[0], reverse=True)
+    return _dedupe_items([row[1] for row in rows])[:80]
 
 
 def _rsshub_url(base_url: str, route: str) -> str:
@@ -218,7 +285,7 @@ def _parse_rss_items(root: ET.Element) -> list[dict[str, str]]:
                 "link": link,
                 "published_at": _format_datetime(_child_text(item, "pubDate") or _child_text(item, "updated")),
                 "category": _clean_text(_child_text(item, "category")),
-                "summary": _clean_text(raw_summary),
+                "summary": _clean_summary_html(raw_summary),
                 "image": _first_image_url(raw_summary, item),
             }
         )
@@ -240,7 +307,7 @@ def _parse_atom_entries(root: ET.Element) -> list[dict[str, str]]:
                 "link": link,
                 "published_at": _format_datetime(_child_text(entry, "published") or _child_text(entry, "updated")),
                 "category": _clean_text(_child_text(entry, "category")),
-                "summary": _clean_text(raw_summary),
+                "summary": _clean_summary_html(raw_summary),
                 "image": _first_image_url(raw_summary, entry),
             }
         )
@@ -402,9 +469,20 @@ def _tw_category_label(value: str) -> str:
 
 
 def _fetch_cn_store(source: SourceDefinition, timeout_seconds: int) -> list[WatchItem]:
-    sku_id = _path_match(source.url, r"product-detail/([^/?#]+)") or "0d527e640bd3ada51565"
-    merchant_id = _fetch_cn_store_merchant_id(sku_id, timeout_seconds)
-    api_url = f"https://sqmallservice.u.sdo.com/api/ps/product/allInOne?skuId={sku_id}"
+    merchant_id = "1"
+    query = urlencode(
+        {
+            "merchantId": merchant_id,
+            "page": 1,
+            "pageSize": 40,
+            "categoryId": "",
+            "tagId": "",
+            "order": 4,
+            "keyword": "",
+            "categoryType": 0,
+        }
+    )
+    api_url = f"https://sqmallservice.u.sdo.com/api/ps/product/list?{query}"
     payload = json.loads(
         _http_get(
             api_url,
@@ -412,99 +490,216 @@ def _fetch_cn_store(source: SourceDefinition, timeout_seconds: int) -> list[Watc
             headers=_cn_store_headers(merchant_id),
         )
     )
-    data = payload.get("data") or {}
-    sku = ((data.get("priceInfo") or {}).get("sku") or {}) if isinstance(data, dict) else {}
-    product = ((data.get("productBasicInfo") or {}).get("product") or {}) if isinstance(data, dict) else {}
-    title = _clean_text(str(sku.get("productName") or product.get("productName") or ""))
-    if not title:
+    if payload.get("resultCode") != 0:
+        raise RuntimeError(f"盛趣商城列表返回失败：{payload.get('resultMsg') or '未知错误'}")
+    items = _parse_cn_store_items(source, payload)
+    if not items:
+        raise RuntimeError("盛趣商城列表没有返回商品，已拒绝覆盖现有基线。")
+    return items
+
+
+def _parse_cn_store_items(source: SourceDefinition, payload: dict[str, Any]) -> list[WatchItem]:
+    data = payload.get("data") if isinstance(payload, dict) else None
+    rows = data.get("productList") if isinstance(data, dict) else None
+    if not isinstance(rows, list):
         return []
-    price = str(sku.get("netPrice") or sku.get("memberPrice") or sku.get("originalPrice") or "")
-    currency = ""
-    if isinstance(sku.get("currency"), dict):
-        currency = str(
-            sku["currency"].get("shortName")
-            or sku["currency"].get("baseUnit")
-            or sku["currency"].get("fullName")
-            or ""
-        )
-    image = str(sku.get("picUrl") or product.get("picUrl") or "")
-    summary = _strip_tags(str(sku.get("description") or product.get("description") or product.get("productContent") or ""))
-    signature = _hash_text(
-        "|".join(
-            [
-                title,
-                price,
-                currency,
-                str(sku.get("saleable") or ""),
-                str(sku.get("publishStatus") or product.get("publishStatus") or ""),
-            ]
-        )
-    )
-    return [
-        WatchItem(
-            source_id=source.id,
-            source_label=source.label,
-            kind=source.kind,
-            region=source.region,
-            item_id=str(sku.get("skuId") or sku_id),
-            title=title,
-            url=source.url,
-            summary=summary[:240],
-            image=urljoin(source.url, image) if image else "",
-            price=price,
-            currency=currency,
-            event_key=f"store-change:{source.id}:{sku_id}:{signature}",
-        )
-    ]
-
-
-def _fetch_cn_store_merchant_id(sku_id: str, timeout_seconds: int) -> str:
-    api_url = f"https://sqmallservice.u.sdo.com/api/cs/merchant/getBySkuId?skuId={sku_id}"
-    try:
-        payload = json.loads(
-            _http_get(
-                api_url,
-                timeout_seconds=timeout_seconds,
-                headers=_cn_store_headers("1"),
+    items: list[WatchItem] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        sku = row.get("sku") if isinstance(row.get("sku"), dict) else {}
+        product = row.get("product") if isinstance(row.get("product"), dict) else {}
+        sku_id = str(sku.get("skuId") or row.get("defaultSKUId") or "").strip()
+        title = _clean_text(str(product.get("productName") or ""))
+        if not sku_id or not title:
+            continue
+        price = str(sku.get("netPrice") or sku.get("memberPrice") or sku.get("originalPrice") or "")
+        currency_data = row.get("currency") if isinstance(row.get("currency"), dict) else sku.get("currency")
+        currency = ""
+        if isinstance(currency_data, dict):
+            currency = str(
+                currency_data.get("shortName")
+                or currency_data.get("baseUnit")
+                or currency_data.get("fullName")
+                or ""
+            )
+        summary = _clean_text(str(product.get("subTitle") or product.get("description") or ""))[:240]
+        image = str(product.get("picUrl") or sku.get("pictureUrl") or "").strip()
+        items.append(
+            WatchItem(
+                source_id=source.id,
+                source_label=source.label,
+                kind=source.kind,
+                region=source.region,
+                item_id=sku_id,
+                title=title,
+                url=f"https://qu.sdo.com/product-detail/{sku_id}",
+                category="新品",
+                summary=summary,
+                image=urljoin(source.url, image) if image else "",
+                price=price,
+                currency=currency,
+                event_key=f"store-new:{source.id}:{sku_id}",
             )
         )
-        return str((payload.get("data") or {}).get("merchantId") or "1")
-    except Exception:
-        return "1"
+    return _dedupe_items(items)
 
 
-def _fetch_generic_product_page(source: SourceDefinition, timeout_seconds: int) -> list[WatchItem]:
-    page = _http_get(source.url, timeout_seconds=timeout_seconds)
-    title = _extract_product_title(page) or _normalize_page_title(_extract_meta(page, "og:title") or _extract_title(page))
-    title = _clean_text(title)
-    if not title:
-        return []
-    parsed = urlparse(source.url)
-    product_id = (
-        _path_match(source.url, r"/product/(\d+)")
-        or _path_match(source.url, r"/detail/(\d+)")
-        or _query_value(source.url, "id")
-        or _hash_text(source.url)
+def _fetch_tw_store(source: SourceDefinition, timeout_seconds: int) -> list[WatchItem]:
+    cookie_jar = CookieJar()
+    opener = build_opener(HTTPCookieProcessor(cookie_jar))
+    _http_open_text(
+        opener,
+        Request(source.url, headers={"User-Agent": USER_AGENT}),
+        timeout_seconds=timeout_seconds,
     )
-    price = _find_price(page)
-    image = _extract_meta(page, "og:image")
-    summary = _strip_tags(_extract_meta(page, "og:description") or _extract_meta(page, "description"))[:240]
-    signature = _hash_text("|".join([title, price, image, summary]))
-    return [
-        WatchItem(
-            source_id=source.id,
-            source_label=source.label,
-            kind=source.kind,
-            region=source.region,
-            item_id=product_id,
-            title=title,
-            url=source.url,
-            summary=summary,
-            image=urljoin(source.url, image) if image else "",
-            price=price,
-            event_key=f"store-change:{source.id}:{product_id}:{signature}",
+    api_url = urljoin(source.url, "../Ajax/ajax_store.aspx")
+    request = Request(
+        api_url,
+        data=urlencode(
+            {
+                "type": "StoreList",
+                "pkind": "1",
+                "pMainID": "",
+                "pSubID": "",
+                "pHashTag": "",
+                "pSearchTip": "",
+                "pOrderBy": "",
+                "pPage": "1",
+            }
+        ).encode("utf-8"),
+        headers={
+            "Accept": "application/json,text/javascript,*/*;q=0.01",
+            "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+            "Referer": source.url,
+            "User-Agent": USER_AGENT,
+            "X-Requested-With": "XMLHttpRequest",
+        },
+        method="POST",
+    )
+    payload = json.loads(_http_open_text(opener, request, timeout_seconds=timeout_seconds))
+    parser = _TWStoreListParser(source)
+    parser.feed(str(payload.get("list") or ""))
+    items = _dedupe_items(parser.items)
+    if not items:
+        raise RuntimeError("台服水晶商城列表没有返回商品，已拒绝覆盖现有基线。")
+    return items
+
+
+class _TWStoreListParser(HTMLParser):
+    def __init__(self, source: SourceDefinition):
+        super().__init__(convert_charrefs=True)
+        self.source = source
+        self.items: list[WatchItem] = []
+        self.current: dict[str, Any] | None = None
+        self.in_title = False
+        self.in_price = False
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        attributes = {name.lower(): str(value or "") for name, value in attrs}
+        if tag == "a" and self.current is None:
+            href = attributes.get("href", "")
+            if "product_detail.aspx" in href and _query_value(href, "id"):
+                self.current = {"href": href, "title": [], "price": [], "image": ""}
+            return
+        if self.current is None:
+            return
+        if tag == "h3":
+            self.in_title = True
+        elif tag == "div" and "price" in attributes.get("class", "").lower().split():
+            self.in_price = True
+        elif tag == "img" and not self.current["image"]:
+            self.current["image"] = attributes.get("src", "")
+
+    def handle_data(self, data: str) -> None:
+        if self.current is None:
+            return
+        if self.in_title:
+            self.current["title"].append(data)
+        if self.in_price:
+            self.current["price"].append(data)
+
+    def handle_endtag(self, tag: str) -> None:
+        if self.current is None:
+            return
+        if tag == "h3":
+            self.in_title = False
+        elif tag == "div" and self.in_price:
+            self.in_price = False
+        elif tag == "a":
+            self._finish_item()
+
+    def _finish_item(self) -> None:
+        if self.current is None:
+            return
+        href = str(self.current["href"])
+        item_id = _query_value(href, "id")
+        title = _clean_text("".join(self.current["title"]))
+        if item_id and title:
+            self.items.append(
+                WatchItem(
+                    source_id=self.source.id,
+                    source_label=self.source.label,
+                    kind=self.source.kind,
+                    region=self.source.region,
+                    item_id=item_id,
+                    title=title,
+                    url=urljoin(self.source.url, href),
+                    category="新品",
+                    image=urljoin(self.source.url, str(self.current["image"])) if self.current["image"] else "",
+                    price=_clean_text("".join(self.current["price"])),
+                    currency="水晶",
+                    event_key=f"store-new:{self.source.id}:{item_id}",
+                )
+            )
+        self.current = None
+        self.in_title = False
+        self.in_price = False
+
+
+def _fetch_jp_store(source: SourceDefinition, timeout_seconds: int) -> list[WatchItem]:
+    query = urlencode({"lang": "ja-jp", "currency": "JPY", "limit": 80, "filters": 1})
+    api_url = f"https://api.store.finalfantasyxiv.com/ffxivcatalog/api/products/?{query}"
+    payload = json.loads(_http_get(api_url, timeout_seconds=timeout_seconds))
+    if payload.get("status") != 0:
+        raise RuntimeError("日服 Online Store 新品接口返回失败。")
+    return _parse_jp_store_items(source, payload)
+
+
+def _parse_jp_store_items(source: SourceDefinition, payload: dict[str, Any]) -> list[WatchItem]:
+    rows = payload.get("products") if isinstance(payload, dict) else None
+    if not isinstance(rows, list):
+        return []
+    items: list[WatchItem] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        product_id = str(row.get("id") or "").strip()
+        sku_id = str(row.get("skuId") or product_id).strip()
+        title = _clean_text(str(row.get("name") or ""))
+        if not product_id or not sku_id or not title:
+            continue
+        price = str(row.get("salePriceText") or row.get("priceText") or "").strip()
+        summary = ""
+        if row.get("salePriceText") and row.get("priceText"):
+            summary = f"原价：{row['priceText']}"
+        items.append(
+            WatchItem(
+                source_id=source.id,
+                source_label=source.label,
+                kind=source.kind,
+                region=source.region,
+                item_id=sku_id,
+                title=title,
+                url=f"https://store.finalfantasyxiv.com/ffxivstore/ja-jp/product/{product_id}",
+                category="新品",
+                summary=summary,
+                image=str(row.get("thumbnailUrl") or "").strip(),
+                price=price,
+                event_key=f"store-new:{source.id}:{sku_id}",
+            )
         )
-    ]
+    return _dedupe_items(items)
 
 
 def _http_get(url: str, *, timeout_seconds: int, headers: dict[str, str] | None = None) -> str:
@@ -517,17 +712,20 @@ def _http_get(url: str, *, timeout_seconds: int, headers: dict[str, str] | None 
     if headers:
         request_headers.update(headers)
     request = Request(url, headers=request_headers)
-    opener = build_opener()
+    return _http_open_text(build_opener(), request, timeout_seconds=timeout_seconds)
+
+
+def _http_open_text(opener, request: Request, *, timeout_seconds: int) -> str:
     try:
         with opener.open(request, timeout=timeout_seconds) as response:
             data = response.read()
             content_type = response.headers.get("Content-Type", "")
-            charset = _charset_from_content_type(content_type)
-            return data.decode(charset, errors="replace")
+            content_encoding = response.headers.get("Content-Encoding", "")
+            return _decode_http_body(data, content_type=content_type, content_encoding=content_encoding)
     except HTTPError as error:
         raise RuntimeError(f"请求失败：HTTP {error.code}") from error
     except socket.timeout as error:
-        raise RuntimeError(f"请求超时：{url}") from error
+        raise RuntimeError(f"请求超时：{request.full_url}") from error
     except URLError as error:
         raise RuntimeError(f"请求失败：{error.reason}") from error
 
@@ -546,6 +744,19 @@ def _cn_store_headers(merchant_id: str) -> dict[str, str]:
 def _charset_from_content_type(value: str) -> str:
     match = re.search(r"charset=([\w.-]+)", value or "", re.I)
     return match.group(1) if match else "utf-8"
+
+
+def _decode_http_body(data: bytes, *, content_type: str = "", content_encoding: str = "") -> str:
+    encoding = str(content_encoding or "").lower()
+    if "gzip" in encoding or data.startswith(b"\x1f\x8b"):
+        data = gzip.decompress(data)
+    elif "deflate" in encoding:
+        try:
+            data = zlib.decompress(data)
+        except zlib.error:
+            data = zlib.decompress(data, -zlib.MAX_WBITS)
+    charset = _charset_from_content_type(content_type)
+    return data.decode(charset, errors="replace")
 
 
 def _extract_anchors(
@@ -645,6 +856,18 @@ def _strip_tags(value: str) -> str:
     text = re.sub(r"<style[\s\S]*?</style>", " ", text, flags=re.I)
     text = re.sub(r"<[^>]+>", " ", text)
     return _clean_text(text)
+
+
+def _clean_summary_html(value: str) -> str:
+    text = html.unescape(str(value or ""))
+    text = re.sub(r"<script\b[\s\S]*?</script>", "", text, flags=re.I)
+    text = re.sub(r"<style\b[\s\S]*?</style>", "", text, flags=re.I)
+    text = re.sub(r"<br\s*/?>", "\n", text, flags=re.I)
+    text = re.sub(r"</(?:p|div|section|article|li|h[1-6])\s*>", "\n", text, flags=re.I)
+    text = re.sub(r"<[^>]+>", "", text)
+    text = html.unescape(text).replace("\r\n", "\n").replace("\r", "\n")
+    lines = [re.sub(r"[\t\f\v ]+", " ", line).strip() for line in text.split("\n")]
+    return "\n".join(line for line in lines if line).strip()
 
 
 def _clean_text(value: str) -> str:

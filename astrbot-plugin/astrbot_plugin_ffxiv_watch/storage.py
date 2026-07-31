@@ -31,6 +31,7 @@ class Target:
 class SourceState:
     source_id: str
     baseline_done: bool
+    baseline_version: int
     last_keys: list[str]
     last_checked_at: str
     last_success_at: str
@@ -93,6 +94,7 @@ class FFXIVWatchStore:
                 CREATE TABLE IF NOT EXISTS source_state (
                     source_id TEXT PRIMARY KEY,
                     baseline_done INTEGER NOT NULL DEFAULT 0,
+                    baseline_version INTEGER NOT NULL DEFAULT 1,
                     last_keys_json TEXT NOT NULL DEFAULT '[]',
                     last_checked_at TEXT NOT NULL DEFAULT '',
                     last_success_at TEXT NOT NULL DEFAULT '',
@@ -101,6 +103,14 @@ class FFXIVWatchStore:
                 )
                 """
             )
+            source_state_columns = {
+                str(row["name"])
+                for row in connection.execute("PRAGMA table_info(source_state)").fetchall()
+            }
+            if "baseline_version" not in source_state_columns:
+                connection.execute(
+                    "ALTER TABLE source_state ADD COLUMN baseline_version INTEGER NOT NULL DEFAULT 1"
+                )
             connection.execute(
                 """
                 CREATE TABLE IF NOT EXISTS events (
@@ -321,6 +331,7 @@ class FFXIVWatchStore:
         return SourceState(
             source_id=source_id,
             baseline_done=False,
+            baseline_version=1,
             last_keys=[],
             last_checked_at="",
             last_success_at="",
@@ -328,25 +339,40 @@ class FFXIVWatchStore:
             last_error="",
         )
 
-    def record_source_success(self, *, source_id: str, keys: list[str], baseline_done: bool = True) -> None:
+    def record_source_success(
+        self,
+        *,
+        source_id: str,
+        keys: list[str],
+        baseline_done: bool = True,
+        baseline_version: int = 1,
+    ) -> None:
         now = self._now()
         with self._lock, self._connect() as connection:
             connection.execute(
                 """
                 INSERT INTO source_state (
-                    source_id, baseline_done, last_keys_json, last_checked_at,
+                    source_id, baseline_done, baseline_version, last_keys_json, last_checked_at,
                     last_success_at, failure_count, last_error
                 )
-                VALUES (?, ?, ?, ?, ?, 0, '')
+                VALUES (?, ?, ?, ?, ?, ?, 0, '')
                 ON CONFLICT(source_id) DO UPDATE SET
                     baseline_done = excluded.baseline_done,
+                    baseline_version = excluded.baseline_version,
                     last_keys_json = excluded.last_keys_json,
                     last_checked_at = excluded.last_checked_at,
                     last_success_at = excluded.last_success_at,
                     failure_count = 0,
                     last_error = ''
                 """,
-                (source_id, 1 if baseline_done else 0, json.dumps(keys[:80]), now, now),
+                (
+                    source_id,
+                    1 if baseline_done else 0,
+                    max(1, int(baseline_version or 1)),
+                    json.dumps(keys[:80]),
+                    now,
+                    now,
+                ),
             )
 
     def record_source_failure(self, *, source_id: str, error: str) -> int:
@@ -461,6 +487,7 @@ class FFXIVWatchStore:
         return SourceState(
             source_id=str(row["source_id"]),
             baseline_done=bool(row["baseline_done"]),
+            baseline_version=int(row["baseline_version"] or 1),
             last_keys=[str(item) for item in last_keys],
             last_checked_at=str(row["last_checked_at"] or ""),
             last_success_at=str(row["last_success_at"] or ""),

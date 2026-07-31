@@ -4,11 +4,27 @@
     "type": "bool",
     "default": true
   },
-  "poll_interval_minutes": {
-    "description": "轮询间隔分钟",
+  "news_poll_interval_seconds": {
+    "description": "新闻与公告轮询间隔秒数",
     "type": "int",
-    "default": 60,
-    "hint": "插件会强制不低于 10 分钟。新闻和商城共用此间隔。"
+    "default": 30,
+    "hint": "最低 15 秒。国服请求本机 RSSHub；日服和美服直接检查 Lodestone News JSON 源。"
+  },
+  "store_poll_start_hour": {
+    "description": "商城每日开始轮询小时（北京时间）",
+    "type": "int",
+    "default": 6
+  },
+  "store_poll_end_hour": {
+    "description": "商城每日结束轮询小时（北京时间）",
+    "type": "int",
+    "default": 20
+  },
+  "store_poll_minutes": {
+    "description": "商城每小时轮询分钟",
+    "type": "string",
+    "default": "5,10",
+    "hint": "逗号分隔。默认在每天 06:05 至 20:10 的每个小时 05 分和 10 分各检查一次。"
   },
   "startup_delay_seconds": {
     "description": "启动后延迟多少秒开始第一次轮询",
@@ -29,8 +45,8 @@
   "enabled_sources": {
     "description": "全局启用的数据源",
     "type": "string",
-    "default": "cn-news,cn-notice,jp-news,cn-store,tw-store,jp-store",
-    "hint": "逗号分隔。新闻源只启用国服新闻、国服公告、日服 Lodestone；韩服商城暂不启用。"
+    "default": "cn-news,cn-notice,jp-news,na-news,cn-store,tw-store,jp-store",
+    "hint": "逗号分隔。新闻源启用国服新闻、国服公告、日服与美服 Lodestone；韩服商城暂不启用。"
   },
   "max_items_per_poll": {
     "description": "每个源每次最多推送条数",

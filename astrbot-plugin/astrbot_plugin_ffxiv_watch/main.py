@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timedelta, timezone
 from hashlib import sha256
 from pathlib import Path
 from urllib.error import URLError
@@ -29,6 +30,7 @@ CATEGORY_LABELS = {
     "news": "新闻",
     "store": "商城",
 }
+STORE_TIMEZONE = timezone(timedelta(hours=8))
 
 
 def _split_ids(value) -> set[str]:
@@ -85,7 +87,7 @@ def _help_text() -> str:
             "当前状态：/ff14watch 状态",
             "测试抓取：/ff14watch 测试",
             "测试单源：/ff14watch 测试 jp-news",
-            "商城测试当前只是详情页样例，不代表新品上架。",
+            "测试商城新品源：/ff14watch 测试 cn-store",
             "当前源：/ff14watch 源",
             "关闭单源：/ff14watch 源 jp-news off",
             "开启单源：/ff14watch 源 jp-news on",
@@ -93,10 +95,10 @@ def _help_text() -> str:
             "开启当前会话：/ff14watch 开",
             "重建基线：/ff14watch 基线",
             "",
-            "当前新闻源：cn-news / cn-notice / jp-news",
+            "当前新闻源：cn-news / cn-notice / jp-news / na-news",
             "当前商城源：cn-store / tw-store / jp-store",
             "韩服商城暂不启用。首次轮询只建立基线，不会推历史。",
-            "当前新品提醒建议优先订阅新闻；商城源暂为详情页变更监控。",
+            "商城源监控商品列表，只在发现新 SKU 时推送。",
         ]
     )
 
@@ -118,6 +120,7 @@ class FFXIVWatchPlugin(Star):
         self.max_output_chars = int(self.config.get("max_output_chars", 3000) or 3000)
         self._poll_task: asyncio.Task | None = None
         self._poll_lock = asyncio.Lock()
+        self._last_store_poll_slot = ""
 
     async def initialize(self) -> None:
         if self.config.get("enabled", True):
@@ -133,7 +136,38 @@ class FFXIVWatchPlugin(Star):
                 pass
 
     def _poll_interval_seconds(self) -> int:
-        return max(10, int(self.config.get("poll_interval_minutes", 60) or 60)) * 60
+        return max(15, int(self.config.get("news_poll_interval_seconds", 30) or 30))
+
+    def _store_poll_hours(self) -> tuple[int, int]:
+        start_hour = max(0, min(23, int(self.config.get("store_poll_start_hour", 6) or 6)))
+        end_hour = max(start_hour, min(23, int(self.config.get("store_poll_end_hour", 20) or 20)))
+        return start_hour, end_hour
+
+    def _store_poll_minutes(self) -> tuple[int, ...]:
+        values = sorted(
+            {
+                int(value)
+                for value in _split_ids(self.config.get("store_poll_minutes", "5,10"))
+                if value.isdigit() and 0 <= int(value) <= 59
+            }
+        )
+        return tuple(values or (5, 10))
+
+    def _current_store_poll_slot(self, now: datetime | None = None) -> str:
+        current = (now or datetime.now(STORE_TIMEZONE)).astimezone(STORE_TIMEZONE)
+        start_hour, end_hour = self._store_poll_hours()
+        if not start_hour <= current.hour <= end_hour:
+            return ""
+        if current.minute not in self._store_poll_minutes():
+            return ""
+        return current.strftime("%Y-%m-%dT%H:%M%z")
+
+    def _claim_store_poll_slot(self, now: datetime | None = None) -> bool:
+        slot = self._current_store_poll_slot(now)
+        if not slot or slot == self._last_store_poll_slot:
+            return False
+        self._last_store_poll_slot = slot
+        return True
 
     def _startup_delay_seconds(self) -> int:
         return max(5, int(self.config.get("startup_delay_seconds", 30) or 30))
@@ -163,7 +197,7 @@ class FFXIVWatchPlugin(Star):
         return 8 * 1024 * 1024
 
     def _enabled_source_ids(self) -> list[str]:
-        configured = _split_ids(self.config.get("enabled_sources", "cn-news,cn-notice,jp-news,cn-store,tw-store,jp-store"))
+        configured = _split_ids(self.config.get("enabled_sources", "cn-news,cn-notice,jp-news,na-news,cn-store,tw-store,jp-store"))
         if not configured:
             configured = set(SOURCES.keys())
         return [source_id for source_id in SOURCES if source_id in configured]
@@ -190,14 +224,18 @@ class FFXIVWatchPlugin(Star):
 
     async def _poll_once(self) -> None:
         async with self._poll_lock:
+            store_due = self._claim_store_poll_slot()
             for source_id in self._enabled_source_ids():
                 source = SOURCES[source_id]
+                if source.kind == "store" and not store_due:
+                    continue
                 targets = self.store.targets_for_source(source_id=source_id, category=source.kind)
                 if not targets:
                     continue
                 await self._process_source(source_id, targets)
 
     async def _process_source(self, source_id: str, targets: list[str]) -> None:
+        source = SOURCES[source_id]
         state = self.store.get_source_state(source_id)
         try:
             items = await asyncio.to_thread(
@@ -215,17 +253,33 @@ class FFXIVWatchPlugin(Star):
             return
 
         keys = [item.stable_key() for item in items]
-        if not state.baseline_done:
+        needs_baseline = not state.baseline_done or state.baseline_version != source.baseline_version
+        if needs_baseline:
             for item in items:
                 self._record_event(item)
-            self.store.record_source_success(source_id=source_id, keys=keys, baseline_done=True)
-            logger.info("FF14 watch source %s baseline recorded with %s items.", source_id, len(items))
+            self.store.record_source_success(
+                source_id=source_id,
+                keys=keys,
+                baseline_done=True,
+                baseline_version=source.baseline_version,
+            )
+            logger.info(
+                "FF14 watch source %s baseline v%s recorded with %s items.",
+                source_id,
+                source.baseline_version,
+                len(items),
+            )
             return
 
         old_keys = set(state.last_keys)
         new_items = [item for item in items if item.stable_key() not in old_keys]
         if not new_items:
-            self.store.record_source_success(source_id=source_id, keys=keys, baseline_done=True)
+            self.store.record_source_success(
+                source_id=source_id,
+                keys=keys,
+                baseline_done=True,
+                baseline_version=source.baseline_version,
+            )
             return
 
         for item in reversed(new_items[: self._max_items_per_poll()]):
@@ -238,7 +292,12 @@ class FFXIVWatchPlugin(Star):
                 if not self.store.mark_delivered(event_key=event_key, target_origin=target_origin):
                     continue
                 await self._send_item_to_origin(target_origin, text, item)
-        self.store.record_source_success(source_id=source_id, keys=keys, baseline_done=True)
+        self.store.record_source_success(
+            source_id=source_id,
+            keys=keys,
+            baseline_done=True,
+            baseline_version=source.baseline_version,
+        )
 
     def _record_event(self, item: WatchItem) -> bool:
         return self.store.upsert_event(
@@ -257,10 +316,24 @@ class FFXIVWatchPlugin(Star):
     def _can_inline_image(self, item: WatchItem | None) -> bool:
         return bool(item and self._include_images() and item.image and self._max_images_per_item() > 0)
 
-    def _build_item_message_chain(self, text: str, image_path: str = "") -> MessageChain:
-        components: list = [Comp.Plain(_clamp(text, self.max_output_chars))]
-        if image_path:
-            components.append(Comp.Image.fromFileSystem(image_path))
+    def _build_item_message_chain(
+        self,
+        text: str,
+        image_path: str = "",
+        item: WatchItem | None = None,
+    ) -> MessageChain:
+        if not image_path:
+            return MessageChain([Comp.Plain(_clamp(text, self.max_output_chars))])
+        if item is None or text != self._format_item(item):
+            return MessageChain(
+                [Comp.Plain(_clamp(text, self.max_output_chars)), Comp.Image.fromFileSystem(image_path)]
+            )
+
+        before_image, after_image = self._format_item_parts(item)
+        components: list = [Comp.Plain(_clamp(before_image, self.max_output_chars))]
+        components.append(Comp.Image.fromFileSystem(image_path))
+        if after_image:
+            components.append(Comp.Plain(_clamp(after_image, self.max_output_chars)))
         return MessageChain(components)
 
     async def _download_item_image(self, item: WatchItem | None) -> str:
@@ -320,7 +393,7 @@ class FFXIVWatchPlugin(Star):
             except Exception as error:
                 logger.warning("FF14 watch image download failed for %s: %s", item.url, error)
         try:
-            await self.context.send_message(origin, self._build_item_message_chain(text, image_path))
+            await self.context.send_message(origin, self._build_item_message_chain(text, image_path, item))
         except Exception as error:
             if image_path:
                 logger.warning("FF14 watch mixed send failed for %s: %s", item.url, error)
@@ -337,7 +410,7 @@ class FFXIVWatchPlugin(Star):
             except Exception as error:
                 logger.warning("FF14 watch command image download failed for %s: %s", item.url, error)
         try:
-            await event.send(self._build_item_message_chain(text, image_path))
+            await event.send(self._build_item_message_chain(text, image_path, item))
         except Exception as error:
             if image_path:
                 logger.warning("FF14 watch command mixed send failed for %s: %s", item.url, error)
@@ -347,29 +420,35 @@ class FFXIVWatchPlugin(Star):
             raise
 
     def _format_item(self, item: WatchItem) -> str:
-        kind_label = "新闻更新" if item.kind == "news" else "商城详情变更"
-        lines = [f"FF14 {kind_label} - {item.region}"]
+        before_image, after_image = self._format_item_parts(item)
+        return "\n".join(part for part in (before_image, after_image) if part)
+
+    def _format_item_parts(self, item: WatchItem) -> tuple[str, str]:
+        kind_label = "新闻更新" if item.kind == "news" else "商城上新"
+        before_lines = [f"FF14 {kind_label} - {item.region}"]
         if item.category:
-            lines.append(f"分类：{item.category}")
-        lines.append(item.title)
+            before_lines.append(f"分类：{item.category}")
+        before_lines.append(item.title)
+
+        after_lines = []
         if item.price:
             price = f"{item.price} {item.currency}".strip()
-            lines.append(f"价格：{price}")
+            after_lines.append(f"价格：{price}")
         if item.summary:
-            lines.append(item.summary)
+            after_lines.append(item.summary)
         if item.published_at:
-            lines.append(f"时间：{item.published_at}")
+            after_lines.append(f"时间：{item.published_at}")
         if item.url:
-            lines.append(item.url)
-        return "\n".join(lines)
+            after_lines.append(item.url)
+        return "\n".join(before_lines), "\n".join(after_lines)
 
     def _format_items_for_test(self, source_id: str, items: list[WatchItem]) -> str:
         source = SOURCES[source_id]
         if not items:
             return f"{source.label}：没有抓到条目。"
         if source.kind == "store":
-            lines = [f"{source.label}：详情页监控样例，抓到 {len(items)} 条，显示前 1 条"]
-            lines.append("说明：这不是新品上架列表，只用于验证当前详情页解析和配图。")
+            lines = [f"{source.label}：新品列表抓到 {len(items)} 条，显示前 1 条"]
+            lines.append("说明：测试只展示抓取结果，不写入推送基线。")
         else:
             lines = [f"{source.label}：抓到 {len(items)} 条，显示前 1 条"]
         for item in items[:1]:
@@ -394,6 +473,7 @@ class FFXIVWatchPlugin(Star):
                     source_id=source_id,
                     keys=[item.stable_key() for item in items],
                     baseline_done=True,
+                    baseline_version=SOURCES[source_id].baseline_version,
                 )
                 ok += 1
             except Exception as error:
@@ -432,21 +512,26 @@ class FFXIVWatchPlugin(Star):
             if invalid:
                 yield event.plain_result(f"未知数据源：{', '.join(invalid)}")
                 return
+            yield event.plain_result(f"正在测试 FF14 数据源（{len(source_ids)} 个），请稍候。")
+            tasks = [
+                asyncio.to_thread(
+                    fetch_source,
+                    source_id,
+                    self._request_timeout_seconds(),
+                    self._rsshub_base_url(),
+                )
+                for source_id in source_ids
+            ]
+            results = await asyncio.gather(*tasks, return_exceptions=True)
             lines: list[str] = []
             first_image_item: WatchItem | None = None
-            for source_id in source_ids:
-                try:
-                    items = await asyncio.to_thread(
-                        fetch_source,
-                        source_id,
-                        self._request_timeout_seconds(),
-                        self._rsshub_base_url(),
-                    )
-                    lines.append(self._format_items_for_test(source_id, items))
-                    if not first_image_item:
-                        first_image_item = next((item for item in items if item.image), None)
-                except Exception as error:
-                    lines.append(f"{source_id} 测试失败：{error}")
+            for source_id, result in zip(source_ids, results):
+                if isinstance(result, BaseException):
+                    lines.append(f"{source_id} 测试失败：{result}")
+                    continue
+                lines.append(self._format_items_for_test(source_id, result))
+                if not first_image_item:
+                    first_image_item = next((item for item in result if item.image), None)
             await self._send_item_to_event(event, "\n\n".join(lines), first_image_item)
             return
 
@@ -546,11 +631,18 @@ class FFXIVWatchPlugin(Star):
         target = self.store.get_target(origin)
         target_enabled = target.enabled if target else True
         subscriptions = self.store.list_subscriptions(origin)
+        store_start_hour, store_end_hour = self._store_poll_hours()
+        store_minutes = self._store_poll_minutes()
         lines = [
             "FF14 watch 状态",
             f"插件后台：{'开启' if self.config.get('enabled', True) else '关闭'}",
             f"当前会话：{'开启' if target_enabled else '关闭'}",
-            f"轮询间隔：{self._poll_interval_seconds() // 60} 分钟",
+            f"新闻轮询：{self._poll_interval_seconds()} 秒",
+            (
+                f"商城轮询：北京时间 {store_start_hour:02d}:{store_minutes[0]:02d}-"
+                f"{store_end_hour:02d}:{store_minutes[-1]:02d}，每小时 "
+                f"{'/'.join(f'{minute:02d}' for minute in store_minutes)} 分"
+            ),
             f"配图：{'开启' if self._include_images() else '关闭'}",
             f"全局源：{', '.join(self._enabled_source_ids())}",
             f"全局订阅会话数：{self.store.count_deliverable_targets()}",

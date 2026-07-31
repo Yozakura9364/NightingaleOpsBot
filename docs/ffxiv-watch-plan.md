@@ -8,7 +8,7 @@
 
 核心目标：
 
-- 监听国服和国际服官方新闻。
+- 监听国服和美服官方新闻。
 - 监听国服、台服、日服、韩服商城商品更新。
 - 群/私聊可独立订阅和关闭，避免和其他群友机器人重复推送。
 - 首次启动只建立基线，不推历史。
@@ -259,7 +259,7 @@ source_state
 新闻推送：
 
 ```text
-FF14 新闻更新｜国际服
+FF14 新闻更新｜美服
 [维护] 全ワールド メンテナンス作業のお知らせ
 日期：2026-xx-xx
 链接：...
@@ -326,15 +326,15 @@ npm run probe:ffxiv-watch -- --source=kr-store
 - 找到列表页、详情页或 API。
 - 输出统一 JSON 样例。
 
-截至 2026-07-07 的探针结果：
+截至 2026-07-20 的探针结果：
 
 | 来源 | 当前状态 | 已确认字段/入口 | 后续处理 |
 | ---- | -------- | -------------- | -------- |
 | `cn-news` | 部分可用 | 官网 SPA 背后存在 `https://cqnews.web.sdo.com/api/news/newsList?gameCode=ff&CategoryCode=...`；`CategoryCode=7187&pageIndex=0&pageSize=10` 可返回置顶/头图新闻。 | 继续补普通新闻列表的 `CategoryCode`，或用浏览器探针确认页面实际请求。 |
-| `jp-news` | 可用 | Lodestone HTML 可解析 `/lodestone/news/detail/...` 链接、标题和 URL。 | 后续增强发布时间和分类解析。 |
-| `cn-store` | 详情 API 可用 | 盛趣商城详情页可从 `https://sqmallservice.u.sdo.com/api/ps/product/allInOne?skuId=...` 拿到商品名、价格、货币、图片、描述、上架状态。 | 继续寻找商品列表页或列表 API，才能判断“新商品”。 |
-| `tw-store` | 详情 HTML 可用 | 详情页 HTML 可解析商品名和图片候选；当前样例可识别 `星芒長袍`。 | 继续寻找列表页或列表 API；价格字段需要增强。 |
-| `jp-store` | 详情 HTML 可用 | 详情页 `<title>` 和 og 信息可解析商品名、描述、图片；当前样例可识别 `スターライトローブ`。 | 优先探测 `https://api.store.finalfantasyxiv.com/ffxivcatalog/api/` 相关接口，补列表和价格。 |
+| `jp-news` | 可用 | 生产服务器访问官方 Lodestone 会返回 403；改为直接读取 RSSHub 同样使用的 `lodestonenews.com` JSON 源，可取得日服和美服 ID、标题、URL、发布时间、摘要和图片。 | 继续监控第三方 JSON 源稳定性；失败时保留现有基线，不覆盖状态。 |
+| `cn-store` | 新品列表可用 | 盛趣公开 `/api/ps/product/list` 支持按最新发布排序；当前读取道具商城最新 40 个 SKU，可得到名称、价格、货币、图片和详情直链。 | 继续观察接口分页上限和字段稳定性；一次上新超过 40 件时存在遗漏风险。 |
+| `tw-store` | 新品列表可用 | 匿名访问商城首页建立会话后，调用 `/web/Ajax/ajax_store.aspx` 的 `StoreList` 可取得最新商品 HTML；当前首页返回 12 件。 | 接口依赖匿名会话 Cookie；需保留“先访问首页再请求列表”的流程。 |
+| `jp-store` | 官方新品 API 可用 | `https://api.store.finalfantasyxiv.com/ffxivcatalog/api/products/?lang=ja-jp&currency=JPY&filters=1` 返回当前 NEW 商品，可得到 SKU、名称、价格、图片和详情 ID。 | 依赖官方 NEW 标记；长时间停机并错过 NEW 展示周期时可能漏报。 |
 | `kr-store` | 暂不可直连 | 本机 Node fetch 失败，服务器 `curl` 20 秒超时。 | 后续考虑代理、浏览器环境或替代数据源；第一版可先不启用韩服源。 |
 
 探针输出建议：
@@ -420,7 +420,7 @@ npm run probe:ffxiv-watch -- --source=kr-store
 ## 当前决策
 
 - 石之家论坛不作为新闻源。
-- 新闻源聚焦国服官网新闻页和国际服 Lodestone。
+- 新闻源聚焦国服官网新闻页和美服 Lodestone。
 - 商城源覆盖国服、台服、日服、韩服商城。
 - 商城更新不限定衣服，有更新就推。
 - Datamining 更新提醒由通用 GitHub Watch 承接，预设分组为 `ffxiv-datamining`。
@@ -447,9 +447,12 @@ astrbot-plugin/astrbot_plugin_ffxiv_watch/
 /ff14watch 状态
 /ff14watch 测试
 /ff14watch 测试 jp-news
+/ff14watch 测试 na-news
 /ff14watch 源
 /ff14watch 源 jp-news off
 /ff14watch 源 jp-news on
+/ff14watch 源 na-news off
+/ff14watch 源 na-news on
 /ff14watch 开
 /ff14watch 关
 /ff14watch 基线
@@ -461,6 +464,7 @@ astrbot-plugin/astrbot_plugin_ffxiv_watch/
 cn-news
 cn-notice
 jp-news
+na-news
 cn-store
 tw-store
 jp-store
@@ -472,8 +476,11 @@ jp-store
 
 - 首次轮询只建立基线，不推历史。
 - 群聊和私聊可分别订阅新闻、商城，并可单独关闭某个源。
-- 新闻源只保留 `cn-news`、`cn-notice`、`jp-news`，分别映射 RSSHub `/ff14/zh/news`、`/ff14/zh/announce`、`/ff14/global/jp/all`。
+- 新闻源启用 `cn-news`、`cn-notice`、`jp-news`、`na-news`。国服新闻和公告继续映射 RSSHub `/ff14/zh/news`、`/ff14/zh/announce`；日服和美服直接读取 `lodestonenews.com` JSON 源，绕过 RSSHub 路由缓存造成的约 10 分钟延迟。
+- 新闻与公告每 30 秒检查一次；商城按北京时间每天 06:05 至 20:10，在每个小时的 05 分和 10 分各检查一次，夜间不轮询。
 - `rsshub_base_url` 默认 `http://rsshub:1200`，用于 AstrBot 与 RSSHub 同 Docker 网络部署。
-- 商城第一版只监控当前已确认详情页的内容变更，尚未实现完整商品列表 / 新品发现。后续需要继续找国服、台服、日服的稳定列表 API。
+- 商城源已改为商品列表新品发现：国服读取最新发布页、台服读取最新商品页、日服读取官方 NEW API。
+- 商城事件键固定为 `来源 + SKU ID`；价格或文案变化不会误报成新品，已经推送过的 SKU 也不会重复发送。
+- 商城列表使用基线版本迁移。旧详情页基线升级后，第一次成功抓取只记录当前商品，不会把历史商品刷进群。
 - `/yoine 推送` 已加入 FF14 watch 菜单入口。
 - 2026-07-08 已加入配图推送：默认 `include_images=true`，每条更新最多发送 1 张图片。图片由数据源返回的图片 URL 提供，发送失败不影响文字推送。
