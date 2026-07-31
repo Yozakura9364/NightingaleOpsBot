@@ -11,6 +11,7 @@ from astrbot.api.event import AstrMessageEvent, MessageChain, filter
 import astrbot.api.message_components as Comp
 from astrbot.api.star import Context, Star, register
 
+from .delivery import deliver_once
 from .github_client import GitHubClient, GitHubCommit, GitHubRelease, GitHubTag
 from .storage import GitHubWatchStore, Subscription
 
@@ -374,8 +375,27 @@ class GitHubWatchPlugin(Star):
             payload=payload,
         )
         for subscription in subscriptions:
-            if self.store.mark_delivered(event_key=event_key, target_origin=subscription.target_origin):
-                await self._send_to_origin(subscription.target_origin, text)
+            try:
+                delivered = await deliver_once(
+                    store=self.store,
+                    event_key=event_key,
+                    target_origin=subscription.target_origin,
+                    send=lambda: self._send_to_origin(subscription.target_origin, text),
+                )
+            except Exception as error:
+                logger.error(
+                    "GitHub watch delivery failed for %s (%s): %s",
+                    event_key,
+                    subscription.target_kind,
+                    error,
+                )
+                raise
+            if delivered:
+                logger.info(
+                    "GitHub watch delivered %s to %s target.",
+                    event_key,
+                    subscription.target_kind,
+                )
         self.store.record_state_success(state_key=state_key, event_key=event_key, baseline_done=True)
 
     def _record_failure(self, state_key: str, error: Exception) -> None:

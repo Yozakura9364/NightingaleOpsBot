@@ -366,6 +366,14 @@ class GitHubWatchStore:
             )
             return cursor.rowcount > 0
 
+    def is_delivered(self, *, event_key: str, target_origin: str) -> bool:
+        with self._lock, self._connect() as connection:
+            row = connection.execute(
+                "SELECT 1 FROM deliveries WHERE event_key = ? AND target_origin = ?",
+                (event_key, target_origin),
+            ).fetchone()
+        return row is not None
+
     def count_enabled_targets(self) -> int:
         with self._lock, self._connect() as connection:
             row = connection.execute(
