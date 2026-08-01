@@ -20,12 +20,12 @@ import {
 } from './armoireStoreLatest.mjs'
 import {
   ackFashionCheckNotification,
-  getFashionCheckAnswer,
   getFashionCheckSubscriberUpdates,
   getFashionCheckStatus,
   peekFashionCheckNotification,
   runFashionCheckTick
 } from './fashionCheckCollector.mjs'
+import { getPublicFashionCheckAnswer } from './fashionCheckPublicSnapshot.mjs'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const PROJECT_ROOT = resolve(process.env.NS_OPS_PROJECT_ROOT || resolve(__dirname, '..'))
@@ -448,9 +448,9 @@ export const jobs = new Map(
     },
     'fashion-check.answer': {
       title: '本周时尚品鉴答案',
-      description: '返回可公开发送到群聊的本周答案。',
+      description: '返回可公开发送到群聊的本周答案（优先 Hermes 发布的公开快照，失败回退私有 staging）。',
       readOnly: true,
-      run: async (payload) => ({ ok: true, output: await getFashionCheckAnswer(payload) })
+      run: async (payload) => ({ ok: true, output: await getPublicFashionCheckAnswer(payload) })
     },
     'fashion-check.status': {
       title: '时尚品鉴采集状态',
