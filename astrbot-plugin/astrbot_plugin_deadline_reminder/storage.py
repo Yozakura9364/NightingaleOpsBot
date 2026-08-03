@@ -15,6 +15,7 @@ class DeadlineItem:
     category: str
     title: str
     due_at: str
+    starts_at: str
     created_by: str
     created_at: str
     enabled: bool
@@ -83,9 +84,21 @@ class DeadlineStore:
             connection.execute(
                 "CREATE INDEX IF NOT EXISTS idx_deadlines_enabled_due ON deadlines(enabled, due_at)"
             )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS start_notices (
+                    target_origin TEXT NOT NULL,
+                    deadline_key TEXT NOT NULL,
+                    starts_at TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    PRIMARY KEY (target_origin, deadline_key, starts_at)
+                )
+                """
+            )
             self._ensure_column(connection, "targets", "broadcast_enabled", "INTEGER NOT NULL DEFAULT 0")
             self._ensure_column(connection, "deadlines", "source_url", "TEXT NOT NULL DEFAULT ''")
             self._ensure_column(connection, "deadlines", "source_id", "TEXT NOT NULL DEFAULT ''")
+            self._ensure_column(connection, "deadlines", "starts_at", "TEXT NOT NULL DEFAULT ''")
             connection.execute(
                 "CREATE UNIQUE INDEX IF NOT EXISTS idx_deadlines_source_id ON deadlines(source_id) WHERE source_id != ''"
             )
@@ -139,7 +152,7 @@ class DeadlineStore:
                 due_at = ends if ends else starts
 
                 row = connection.execute(
-                    "SELECT id, title, due_at, category, source_url, enabled FROM deadlines WHERE source_id = ?",
+                    "SELECT id, title, due_at, starts_at, category, source_url, enabled FROM deadlines WHERE source_id = ?",
                     (event_id,),
                 ).fetchone()
 
@@ -148,21 +161,22 @@ class DeadlineStore:
                     needs_update = (
                         existing["title"] != title
                         or existing["due_at"] != due_at
+                        or existing["starts_at"] != starts
                         or existing["category"] != category
                         or existing["source_url"] != url
                         or not existing["enabled"]
                     )
                     if needs_update:
                         connection.execute(
-                            "UPDATE deadlines SET title=?, due_at=?, category=?, source_url=?, enabled=1 WHERE source_id=?",
-                            (title, due_at, category, url, event_id),
+                            "UPDATE deadlines SET title=?, due_at=?, starts_at=?, category=?, source_url=?, enabled=1 WHERE source_id=?",
+                            (title, due_at, starts, category, url, event_id),
                         )
                         changed += 1
                 else:
                     connection.execute(
-                        """INSERT INTO deadlines (target_origin, target_kind, category, title, due_at, created_by, created_at, enabled, source_url, source_id)
-                           VALUES (?, 'broadcast', ?, ?, ?, 'hermes', ?, 1, ?, ?)""",
-                        (self.HERMES_ORIGIN, category, title, due_at, now, url, event_id),
+                        """INSERT INTO deadlines (target_origin, target_kind, category, title, due_at, starts_at, created_by, created_at, enabled, source_url, source_id)
+                           VALUES (?, 'broadcast', ?, ?, ?, ?, 'hermes', ?, 1, ?, ?)""",
+                        (self.HERMES_ORIGIN, category, title, due_at, starts, now, url, event_id),
                     )
                     changed += 1
 
@@ -188,6 +202,7 @@ class DeadlineStore:
         due_at: str,
         created_by: str,
         source_url: str = "",
+        starts_at: str = "",
     ) -> DeadlineItem:
         now = self._now()
         with self._lock, self._connect() as connection:
@@ -196,11 +211,11 @@ class DeadlineStore:
             cursor = connection.execute(
                 """
                 INSERT INTO deadlines (
-                    target_origin, target_kind, category, title, due_at, created_by, created_at, enabled, source_url
+                    target_origin, target_kind, category, title, due_at, starts_at, created_by, created_at, enabled, source_url
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
                 """,
-                (target_origin, target_kind, category, title, due_at, created_by, now, source_url),
+                (target_origin, target_kind, category, title, due_at, starts_at, created_by, now, source_url),
             )
             row = connection.execute(
                 "SELECT * FROM deadlines WHERE id = ?",
@@ -371,6 +386,30 @@ class DeadlineStore:
                 (date_value, now, target_origin),
             )
 
+    # ── start-reminder idempotency ────────────────────────
+
+    def has_start_notice(self, *, target_origin: str, deadline_key: str, starts_at: str) -> bool:
+        with self._lock, self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT 1 FROM start_notices
+                WHERE target_origin = ? AND deadline_key = ? AND starts_at = ?
+                """,
+                (target_origin, deadline_key, starts_at),
+            ).fetchone()
+        return row is not None
+
+    def record_start_notice(self, *, target_origin: str, deadline_key: str, starts_at: str) -> None:
+        now = self._now()
+        with self._lock, self._connect() as connection:
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO start_notices (target_origin, deadline_key, starts_at, created_at)
+                VALUES (?, ?, ?, ?)
+                """,
+                (target_origin, deadline_key, starts_at, now),
+            )
+
     @staticmethod
     def _row_to_deadline(row) -> DeadlineItem:
         return DeadlineItem(
@@ -380,6 +419,7 @@ class DeadlineStore:
             category=str(row["category"]),
             title=str(row["title"]),
             due_at=str(row["due_at"]),
+            starts_at=str(row["starts_at"] or ""),
             created_by=str(row["created_by"]),
             created_at=str(row["created_at"]),
             enabled=bool(row["enabled"]),

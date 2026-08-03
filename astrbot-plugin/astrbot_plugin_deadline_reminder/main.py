@@ -69,6 +69,7 @@ def _help_text(hour: int, minute: int) -> str:
             "",
             f"每天 {hour:02d}:{minute:02d} 推送当前会话未结束的 DDL。",
             "活动由 Hermes 自动同步，无需手动添加。",
+            "活动开始时会推送开始提醒（可在插件配置关闭）。",
             "",
             "查看：/ddl 列表",
             "预览：/ddl 今日",
@@ -90,7 +91,7 @@ def _help_text(hour: int, minute: int) -> str:
     "astrbot_plugin_deadline_reminder",
     "NightingaleSilence",
     "Auto-synced deadline reminder fed by Hermes community events.",
-    "0.2.0",
+    "0.3.0",
 )
 class DeadlineReminderPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
@@ -125,6 +126,16 @@ class DeadlineReminderPlugin(Star):
 
     def _daily_minute(self) -> int:
         return max(0, min(59, int(self.config.get("daily_minute", 0) or 0)))
+
+    def _notify_on_start(self) -> bool:
+        return bool(self.config.get("notify_on_start", True))
+
+    def _start_advance_days(self) -> int:
+        try:
+            days = int(self.config.get("start_advance_days", 0) or 0)
+        except (TypeError, ValueError):
+            days = 0
+        return max(0, min(30, days))
 
     def _can_manage(self, event: AstrMessageEvent) -> bool:
         sender = str(event.get_sender_id())
@@ -185,18 +196,42 @@ class DeadlineReminderPlugin(Star):
         while True:
             try:
                 await self._maybe_send_daily()
+                await self._maybe_send_start_reminders()
             except asyncio.CancelledError:
                 raise
             except Exception as error:
                 logger.error("Deadline daily loop error: %s", error)
             await asyncio.sleep(60)
 
-    async def _maybe_send_daily(self) -> None:
+    def _tz(self):
         from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
         try:
-            tz = ZoneInfo(self._timezone())
+            return ZoneInfo(self._timezone())
         except ZoneInfoNotFoundError:
-            tz = ZoneInfo("Asia/Shanghai")
+            return ZoneInfo("Asia/Shanghai")
+
+    def _collect_items_for_target(self, target, now_iso: str) -> list[DeadlineItem]:
+        items = self.store.list_active_deadlines(target_origin=target.target_origin, now_iso=now_iso)
+        if target.target_kind == "group" and target.broadcast_enabled:
+            items = self.store.list_active_deadlines(
+                target_origin=self.store.BROADCAST_ORIGIN,
+                now_iso=now_iso,
+            ) + self.store.list_active_deadlines(
+                target_origin=self.store.HERMES_ORIGIN,
+                now_iso=now_iso,
+            ) + items
+        # Deduplicate by (title, category, due_at, starts_at)
+        seen = set()
+        deduped = []
+        for item in items:
+            key = (item.title, item.category, item.due_at[:16], (item.starts_at or "")[:16])
+            if key not in seen:
+                seen.add(key)
+                deduped.append(item)
+        return deduped
+
+    async def _maybe_send_daily(self) -> None:
+        tz = self._tz()
         now = datetime.now(tz)
         if (now.hour, now.minute) < (self._daily_hour(), self._daily_minute()):
             return
@@ -208,15 +243,7 @@ class DeadlineReminderPlugin(Star):
                 continue
             if target.last_daily_date == today:
                 continue
-            items = self.store.list_active_deadlines(target_origin=target.target_origin, now_iso=now_iso)
-            if target.target_kind == "group" and target.broadcast_enabled:
-                items = self.store.list_active_deadlines(
-                    target_origin=self.store.BROADCAST_ORIGIN,
-                    now_iso=now_iso,
-                ) + self.store.list_active_deadlines(
-                    target_origin=self.store.HERMES_ORIGIN,
-                    now_iso=now_iso,
-                ) + items
+            items = self._collect_items_for_target(target, now_iso)
             if not items:
                 self.store.update_last_daily_date(target_origin=target.target_origin, date_value=today)
                 continue
@@ -227,40 +254,162 @@ class DeadlineReminderPlugin(Star):
             )
             self.store.update_last_daily_date(target_origin=target.target_origin, date_value=today)
 
+    # ── start reminder (idempotent) ───────────────────────
+
+    async def _maybe_send_start_reminders(self) -> None:
+        if not self._notify_on_start():
+            return
+        tz = self._tz()
+        now = datetime.now(tz)
+        now_iso = now.isoformat(timespec="minutes")
+        advance = timedelta(days=self._start_advance_days())
+        for target in self.store.list_targets_for_daily(now_iso=now_iso):
+            if target.target_origin == self.store.BROADCAST_ORIGIN or target.target_kind == "broadcast":
+                continue
+            pending: list[tuple[DeadlineItem, str]] = []
+            for item in self._collect_items_for_target(target, now_iso):
+                if not item.starts_at:
+                    continue
+                starts = self._try_parse_dt(item.starts_at, tz)
+                due = self._try_parse_dt(item.due_at, tz)
+                if starts is None or due is None:
+                    continue
+                # 到点窗口：[starts - advance, starts + 1天]；已结束或过早都跳过
+                if now < starts - advance:
+                    continue
+                if now > starts + timedelta(days=1):
+                    continue
+                if due < now:
+                    continue
+                key = item.source_id or f"manual:{item.id}"
+                if self.store.has_start_notice(
+                    target_origin=target.target_origin,
+                    deadline_key=key,
+                    starts_at=item.starts_at,
+                ):
+                    continue
+                pending.append((item, key))
+            if not pending:
+                continue
+            text = self._format_start_reminder([item for item, _ in pending], now)
+            await self.context.send_message(
+                target.target_origin,
+                MessageChain([Comp.Plain(_clamp(text, self.max_output_chars))]),
+            )
+            for item, key in pending:
+                self.store.record_start_notice(
+                    target_origin=target.target_origin,
+                    deadline_key=key,
+                    starts_at=item.starts_at,
+                )
+
     # ── formatting ─────────────────────────────────────────
 
-    def _format_daily(self, items: list[DeadlineItem], now: datetime) -> str:
+    @staticmethod
+    def _try_parse_dt(value: str, tz) -> datetime | None:
+        try:
+            parsed = datetime.fromisoformat(str(value))
+        except ValueError:
+            return None
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=tz)
+        return parsed.astimezone(tz)
+
+    def _split_by_start(self, items: list[DeadlineItem], now: datetime) -> tuple[list[DeadlineItem], list[DeadlineItem]]:
+        ongoing: list[DeadlineItem] = []
+        upcoming: list[DeadlineItem] = []
+        for item in items:
+            starts = self._try_parse_dt(item.starts_at, now.tzinfo) if item.starts_at else None
+            if starts is not None and starts > now:
+                upcoming.append(item)
+            else:
+                ongoing.append(item)
+        return ongoing, upcoming
+
+    def _format_group_lines(self, items: list[DeadlineItem], now: datetime, *, show_start: bool) -> list[str]:
         grouped: dict[str, list[DeadlineItem]] = defaultdict(list)
         for item in items:
             grouped[item.category].append(item)
 
-        lines = ["日程提醒"]
+        lines: list[str] = []
         for category in sorted(grouped.keys()):
             lines.extend(["", f"{category}："])
             for item in grouped[category]:
                 due_at = datetime.fromisoformat(item.due_at).astimezone(now.tzinfo)
                 lines.append(f"{item.title}")
-                lines.append(f"{due_at.strftime('%Y-%m-%d %H:%M')}（剩余{self._format_distance(due_at - now)}）")
+                if show_start and item.starts_at:
+                    starts = self._try_parse_dt(item.starts_at, now.tzinfo)
+                    if starts is not None:
+                        lines.append(
+                            f"开始：{starts.strftime('%Y-%m-%d %H:%M')}（{self._format_distance(starts - now)}后开始）"
+                        )
+                    lines.append(f"🔔 结束：{due_at.strftime('%Y-%m-%d %H:%M')}")
+                else:
+                    lines.append(f"截止：{due_at.strftime('%Y-%m-%d %H:%M')}（剩余{self._format_distance(due_at - now)}）")
                 if item.source_url:
                     lines.append(f"原文：{item.source_url}")
                 lines.append("")
+        return lines
+
+    def _format_daily(self, items: list[DeadlineItem], now: datetime) -> str:
+        ongoing, upcoming = self._split_by_start(items, now)
+        lines = ["日程提醒"]
+        if ongoing:
+            lines.extend(["", "【进行中】"])
+            lines.extend(self._format_group_lines(ongoing, now, show_start=False))
+        if upcoming:
+            lines.extend(["", "【未开始】"])
+            lines.extend(self._format_group_lines(upcoming, now, show_start=True))
+        return "\n".join(lines).strip()
+
+    def _format_start_reminder(self, items: list[DeadlineItem], now: datetime) -> str:
+        lines = ["活动开始提醒"]
+        for item in items:
+            starts = self._try_parse_dt(item.starts_at, now.tzinfo)
+            starts_text = starts.strftime('%Y-%m-%d %H:%M') if starts else item.starts_at
+            lines.extend(
+                [
+                    "",
+                    f"🎉 {item.title} 将于 {starts_text} 开启！",
+                ]
+            )
+            if item.source_url:
+                lines.append(f"原文：{item.source_url}")
         return "\n".join(lines).strip()
 
     def _format_list(self, items: list[DeadlineItem], now: datetime) -> str:
         if not items:
             return "当前还没有日程。"
-        lines = ["当前日程"]
-        for item in items:
-            due_at = datetime.fromisoformat(item.due_at).astimezone(now.tzinfo)
-            distance = self._format_distance(due_at - now)
-            status = "（已暂停）" if not item.enabled else ""
-            hermes_tag = ""
-            url_line = f"\n原文：{item.source_url}" if item.source_url else ""
-            lines.append(
-                f"{item.category}：{item.title}{status}\n"
-                f"{due_at.strftime('%Y-%m-%d %H:%M')}（剩余{distance}）{url_line}"
-            )
-        return "\n\n".join(lines)
+        ongoing, upcoming = self._split_by_start(items, now)
+        sections: list[str] = []
+        for label, group in (("进行中", ongoing), ("未开始", upcoming)):
+            if not group:
+                continue
+            blocks: list[str] = []
+            for item in group:
+                due_at = datetime.fromisoformat(item.due_at).astimezone(now.tzinfo)
+                distance = self._format_distance(due_at - now)
+                status = "（已暂停）" if not item.enabled else ""
+                url_line = f"\n原文：{item.source_url}" if item.source_url else ""
+                start_dt = self._try_parse_dt(item.starts_at, now.tzinfo) if item.starts_at else None
+                is_upcoming = start_dt is not None and start_dt > now
+                if is_upcoming:
+                    lines = [
+                        f"{item.category}：{item.title}{status}",
+                        f"开始：{start_dt.strftime('%Y-%m-%d %H:%M')}",
+                        f"🔔 结束：{due_at.strftime('%Y-%m-%d %H:%M')}{url_line}",
+                    ]
+                else:
+                    start_line = ""
+                    if start_dt is not None:
+                        start_line = f"\n开始：{start_dt.strftime('%Y-%m-%d %H:%M')}"
+                    lines = [
+                        f"{item.category}：{item.title}{status}",
+                        f"截止：{due_at.strftime('%Y-%m-%d %H:%M')}（剩余{distance}）{start_line}{url_line}",
+                    ]
+                blocks.append("\n".join(lines))
+            sections.append(f"—— {label} ——\n" + "\n\n".join(blocks))
+        return "当前日程\n" + "\n\n".join(sections)
 
     @staticmethod
     def _format_distance(delta: timedelta) -> str:

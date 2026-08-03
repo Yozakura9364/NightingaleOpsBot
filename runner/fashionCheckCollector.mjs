@@ -731,12 +731,21 @@ export function formatFashionCheckAnswer(current, date = new Date()) {
 
   const english = current.sources['allgamestaff-en']
   if (english?.globalIssue === expectedIssue) {
-    if (!manualScorePlanExists(manual, 80)) {
-      const plan80 = formatPlanTable(english, '80 points', '80 分方案')
+    const missing80 = !manualScorePlanExists(manual, 80)
+    const missing100 = !manualScorePlanExists(manual, 100)
+    if (missing80 || missing100) {
+      const hasManualAny = manualDyeGuide.length > 0 || manualScorePlans.length > 0
+      const missingLabel = []
+      if (missing80) missingLabel.push('80 分')
+      if (missing100) missingLabel.push('100 分')
+      lines.push('', `⚠️ 中文方案未更新（${missingLabel.join(' / ')}），以下为英文源参考，请以游戏内实际为准：`)
+    }
+    if (missing80) {
+      const plan80 = formatPlanTable(english, '80 points', '80 分方案（英文参考）')
       if (plan80.length) lines.push('', ...plan80)
     }
-    if (!manualScorePlanExists(manual, 100)) {
-      const plan100 = formatPlanTable(english, '100 points', '100 分方案')
+    if (missing100) {
+      const plan100 = formatPlanTable(english, '100 points', '100 分方案（英文参考）')
       if (plan100.length) lines.push('', ...plan100)
     }
   } else {

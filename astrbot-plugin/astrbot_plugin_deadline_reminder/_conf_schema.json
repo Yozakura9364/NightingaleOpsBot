@@ -19,6 +19,17 @@
     "type": "string",
     "default": "Asia/Shanghai"
   },
+  "notify_on_start": {
+    "description": "Push a one-time reminder when an event starts",
+    "type": "bool",
+    "default": true
+  },
+  "start_advance_days": {
+    "description": "Send the start reminder this many days before the event starts",
+    "type": "int",
+    "default": 1,
+    "hint": "0 = notify on the start day. Max 30."
+  },
   "manage_requires_admin": {
     "description": "Only bot/group admins can add, delete, enable, or disable reminders",
     "type": "bool",
