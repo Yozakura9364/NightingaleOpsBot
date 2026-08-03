@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 from hashlib import sha256
 from pathlib import Path
 from urllib.error import URLError
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse, urlunparse
 from urllib.request import Request, build_opener
 
 from astrbot.api import AstrBotConfig, logger
@@ -346,15 +346,25 @@ class FFXIVWatchPlugin(Star):
         if parsed.scheme not in {"http", "https"}:
             raise ValueError("invalid image url scheme")
 
+        # 国服商城图片 URL 的路径/查询可能含中文文件名（如 战场玫瑰套装….jpg），
+        # urllib 构造 Request 时对非 ASCII 字符按 ascii 编码会抛 UnicodeEncodeError，
+        # 这里先把非 ASCII 部分做百分号编码（保留已有转义与常见保留字符）。
+        encoded_url = urlunparse(
+            parsed._replace(
+                path=quote(parsed.path, safe="/%"),
+                query=quote(parsed.query, safe="=&%"),
+            )
+        )
+
         suffix = Path(parsed.path).suffix.lower()
         extension = suffix if suffix in {".jpg", ".jpeg", ".png", ".gif", ".webp"} else ".jpg"
         if extension == ".jpeg":
             extension = ".jpg"
-        target = self.image_dir / f"{sha256(image_url.encode('utf-8')).hexdigest()[:24]}{extension}"
+        target = self.image_dir / f"{sha256(encoded_url.encode('utf-8')).hexdigest()[:24]}{extension}"
         if target.exists() and 0 < target.stat().st_size <= self._max_image_bytes():
             return str(target)
 
-        request = Request(image_url, headers={"User-Agent": USER_AGENT})
+        request = Request(encoded_url, headers={"User-Agent": USER_AGENT})
         opener = build_opener()
         try:
             with opener.open(request, timeout=self._image_download_timeout_seconds()) as response:

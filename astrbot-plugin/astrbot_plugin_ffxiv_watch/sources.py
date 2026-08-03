@@ -477,7 +477,7 @@ def _fetch_cn_store(source: SourceDefinition, timeout_seconds: int) -> list[Watc
             "pageSize": 40,
             "categoryId": "",
             "tagId": "",
-            "order": 4,
+            "order": 5,
             "keyword": "",
             "categoryType": 0,
         }
